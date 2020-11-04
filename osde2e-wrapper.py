@@ -286,11 +286,11 @@ def main():
         '--watcher-delay',
         default=60,
         type=int,
-        help='Delay between each ')
+        help='Delay between each status check')
     parser.add_argument(
         '--cleanup-clusters',
         default=True,
-        help='Should we delete the temporary directory')
+        help='Cleanup any non-error state clusters upon test completion')
     parser.add_argument(
         '--user-override',
         type=str,
@@ -310,14 +310,15 @@ def main():
     else:
         es = None
 
-    # global uuid to assign for the group of clusters created. each cluster will have its own uuid as well
+    # global uuid to assign for the group of clusters created. each cluster will have its own cluster-id
     my_uuid = args.uuid
     if my_uuid is None:
         my_uuid = str(uuid.uuid4())
+    logging.info('Test running with UUID: %s' % my_uuid)
 
     my_path = args.path
     if my_path is None:
-        my_path = '/tmp/' + guuid
+        my_path = '/tmp/' + my_uuid
     logging.info('Using %s as temp directory' % (my_path))
     _create_path(my_path)
 
