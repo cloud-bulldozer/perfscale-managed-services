@@ -37,36 +37,33 @@ The wrapper takes the following required variables:
                    **NOTE: See the Account Configuration File section for more details**
 
 
-Optional Elasticsearch variables:
+### Optional Elasticsearch variables:
+
 **NOTE: If elasticsearch server and port are omitted then the cluster test will run as normal
 without uploading any information**
 
-'--server' The elasticsearch server
-'--port' The elasticsearch port
-'--sslskipverify' If elasticsearch is setup with ssl we can disable tls cert verification.
-'--index' The index to write to. Default: osde2e-install-timings
+| Option | Description | Default |
+|--------|-------------|---------|
+| --server | The elasticsearch server| -- |
+| --port | The elasticsearch port | -- |
+| --sslskipverify | If elasticsearch is setup with ssl we can disable tls cert verification. | False |
+| --index | The index to write to. | osde2e-install-timings |
 
-Optional variables:
+### Optional variables:
 
-'--uuid' A uuid to use for the test. If one is not provided it will be generated for you.
-'--path' A full path to a temporary location to use for the test. Default: /tmp/[uuid]
-'--cleanup' Delete the temporary directory (including all the data from the clusters) upon completion. Default: False
-'--command' Full path to the osde2e and osde2ectl command directory. If not provided we will download and compile the latest
-'--cluster-count' Total number of clusters to create. Default: 1
-'--batch-size' Number of clusters to create in a batch. If not set it will try and create them all at once.
-               ***NOTE: If not used in conjunction with --delay-between-batch the cluster creation will block at the 
-               set batch size until one completes then continue. I.e. if 3 clusters are requested with a batch size of 2.
-               The first two will be requested and then it will block until one of those completes to request the third.
-'--delay-between-batch' If set, we will wait X seconds between each batch request
-'--watcher-delay' Delay between each status check in seconds. Default: 60
-'--cleanup-clusters' Cleanup any non-error state clusters upon test completion. Default: True
-'--user-override' User to set as the owner. **NOTE: this takes precidence over what is provided in the account-config file**
-'--aws-account-file' AWS account file that provides account,accessKey,secretKey. This file will be looped over as needed to
-                     achieve all clusters requested. Example format:
-                     ```
-                     0009808111,AAAA53YREVPCS111,00019ILbzo+yWU9C5FG5YrnoZC5eBg2111
-                     0007006111,AAAAUZRL736SW6111,000P/b94AL+LSCzJBWbZCYRuYArF9Zr111
-                     ```
+| Option | Description | Default |
+|--------|-------------|---------|
+| --uuid | Uuid to use for the test. If one is not provided it will be generated for you. | -- |
+| --path | Full path to a temporary location to use for the test. | /tmp/[uuid] |
+| --cleanup | Delete the temporary directory (including all the data from the clusters) upon completion. | False |
+| --command | Full path to the osde2e and osde2ectl command directory. If not provided we will download and compile the latest | -- |
+| --cluster-count | Total number of clusters to create. | 1 |
+| --batch-size | Number of clusters to create in a batch. If not set it will try and create them all at once. <br>**NOTE**: If not used in conjunction with --delay-between-batch the cluster creation will block at the set batch size until one completes then continue. I.e. if 3 clusters are requested with a batch size of 2. The first two will be requested and then it will block until one of those completes to request the third. | -- |
+| --delay-between-batch | If set, we will wait X seconds between each batch request | -- |
+| --watcher-delay | Delay between each status check in seconds. | 60 |
+| --cleanup-clusters | Cleanup any non-error state clusters upon test completion. | True |
+| --user-override | User to set as the owner. **NOTE: this takes precidence over what is provided in the account-config file** | -- |
+| --aws-account-file | AWS account file that provides account,accessKey,secretKey. This file will be looped over as needed to <br> achieve all clusters requested. Example format: <br> ```0009808111,AAAA53YREVPCS111,00019ILbzo+yWU9C5FG5YrnoZC5eBg2111```<br>```0007006111,AAAAUZRL736SW6111,000P/b94AL+LSCzJBWbZCYRuYArF9Zr111``` | -- |
 
 ## Account Configuration File
 
