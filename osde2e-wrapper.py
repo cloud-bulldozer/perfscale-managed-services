@@ -190,6 +190,7 @@ def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay):
 
     # To stop the watcher we expect the run attribute to be not True
     while getattr(my_thread, "run", True):
+## TO DO: Add check of parent thread. if its done exit
         logging.debug(cmd)
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
         stdout,stderr = process.communicate()
@@ -330,6 +331,12 @@ def main():
     logging.info('Using %s as temp directory' % (my_path))
     _create_path(my_path)
 
+    if os.path.exists(args.account_config):
+        logging.debug('Account configuration file exists')
+    else:
+        logging.error('Account configuration file not found at %s' % args.account_config)
+        exit(1)
+
     # load the account config yaml
     try:
         account_config = yaml.safe_load(open(args.account_config))
@@ -337,7 +344,7 @@ def main():
         logging.error(err)
         logging.error('Failed to load account configuration yaml')
         exit(1)
-    
+
     # Verify that ocm and token information are provided
     if "ocm" not in account_config.keys():
         logging.error('No ocm configuration supplied in account configuration file: %s' % args.account_config)
@@ -365,6 +372,11 @@ def main():
     # If the aws account file is given, load its data into a list of dictionaries
     aws_accounts = []
     if args.aws_account_file is not None:
+        if os.path.exists(args.aws_account_file):
+            logging.debug('AWS Account file exists')
+        else:
+            logging.error('AWS Account configuration file not found at %s' % args.aws_account_file)
+            exit(1)
         logging.info('AWS account file found. Loading account information')
         for line in open(args.aws_account_file).readlines():
             field = line.split(',')
