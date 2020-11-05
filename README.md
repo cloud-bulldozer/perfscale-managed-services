@@ -95,6 +95,7 @@ ocm:
   env: stage
   token: kjashf9KJND87
   userOverride: myFoo
+  ccs: True
   aws:
     account: 12345
     accessKey: ABCD1243

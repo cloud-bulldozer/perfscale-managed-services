@@ -75,11 +75,11 @@ def _index_result(es,my_uuid,index,metadata_path,cluster_start_time,success,time
         "cluster_version": metadata['cluster-version'],
         "environment": metadata['environment'],
         "region": metadata['region'],
-        "time_to_ocm_reporting_installed": metadata['time-to-ocm-reporting-installed'],
-        "time_to_cluster_ready": metadata['time-to-cluster-ready'],
-        "time_to_upgraded_cluster": metadata['time-to-upgraded-cluster'],
-        "time_to_upgraded_cluster_ready": metadata['time-to-upgraded-cluster-ready'],
-        "time_to_certificate_issued": metadata['time-to-certificate-issued'],
+        "time_to_ocm_reporting_installed": int(float(metadata['time-to-ocm-reporting-installed'])),
+        "time_to_cluster_ready": int(float(metadata['time-to-cluster-ready'])),
+        "time_to_upgraded_cluster": int(float(metadata['time-to-upgraded-cluster'])),
+        "time_to_upgraded_cluster_ready": int(float(metadata['time-to-upgraded-cluster-ready'])),
+        "time_to_certificate_issued": int(float(metadata['time-to-certificate-issued'])),
         "install_phase_pass_rate": metadata['install-phase-pass-rate'],
         "upgrade_phase_pass_rate": metadata['upgrade-phase-pass-rate'],
         "log_metrics": {
@@ -190,7 +190,6 @@ def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay):
 
     # To stop the watcher we expect the run attribute to be not True
     while getattr(my_thread, "run", True):
-## TO DO: Add check of parent thread. if its done exit
         logging.debug(cmd)
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
         stdout,stderr = process.communicate()
@@ -366,6 +365,7 @@ def main():
     # launch watcher thread to report status
     logging.info('Launching watcher thread')
     watcher = threading.Thread(target=_watcher,args=(cmnd_path + "/osde2ectl",account_config,my_path,args.cluster_count,args.watcher_delay))
+    watcher.daemon = True
     watcher.start()
     logging.info('Attempting to start %d clusters with %d batch size' % (args.cluster_count,args.batch_size))
 
