@@ -47,8 +47,8 @@ def _connect_to_es(server, port, es_ssl):
 
     return es
 
-def _index_result(es,my_uuid,index,metadata_path):
-    timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+def _index_result(es,my_uuid,index,metadata_path,cluster_start_time,success,timestamp):
+    end_time = time.strftime("%Y-%m-%dT%H:%M:%S")
    
     logging.info('Checking if metadata file exists')
     try:
@@ -66,6 +66,9 @@ def _index_result(es,my_uuid,index,metadata_path):
 
     my_doc = {
         "timestamp": timestamp,
+        "cluster_start_time": cluster_start_time,
+        "cluster_end_time": end_time,
+        "install_successful": success,
         "uuid": my_uuid,
         "cluster_id": metadata['cluster-id'],
         "cluster_name": metadata['cluster-name'],
@@ -153,9 +156,12 @@ def _verify_cmnd(osde2e_cmnd,my_path):
 
     return osde2e_cmnd
 
-def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc):
-    print("FOO")
-    # osde2e takes a relative path to the account file so we need to copy it to our cwd
+def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,timestamp):
+    cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
+    success = True
+    
+    # osde2e takes a relative path to the account file so we need to create it in a working dir and 
+    # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + str(my_inc)
     os.mkdir(cluster_path)
     yaml.dump(account_config,open(cluster_path + "/cluster_account.yaml",'w'))
@@ -169,8 +175,9 @@ def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc):
     if process.returncode != 0:
         logging.error('Failed to build cluster number %d' % my_inc)
         logging.error(stderr.strip().decode("utf-8"))
+        success = False
     if es is not None:
-        _index_result(es,my_uuid,index,cluster_path + "/metadata.json")
+        _index_result(es,my_uuid,index,cluster_path + "/metadata.json",cluster_start_time,success,timestamp)
 
 def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay):
     logging.info('Watcher thread started')
@@ -371,6 +378,7 @@ def main():
     cluster_thread_list = []
     aws_account_counter = 0
     batch_count = 0
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
     try:
         for i in range(0, args.cluster_count):
             my_cluster_config = account_config.copy()
@@ -402,7 +410,7 @@ def main():
 
             logging.info('Starting Cluster thread %d' % (i + 1))
             try:
-                thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.index,my_uuid,i))
+                thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.index,my_uuid,i,timestamp))
             except Exception as err:
                 logging.error(err)
             cluster_thread_list.append(thread)
