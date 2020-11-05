@@ -154,6 +154,7 @@ def _verify_cmnd(osde2e_cmnd,my_path):
     return osde2e_cmnd
 
 def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc):
+    print("FOO")
     # osde2e takes a relative path to the account file so we need to copy it to our cwd
     cluster_path = my_path + "/" + str(my_inc)
     os.mkdir(cluster_path)
@@ -372,23 +373,21 @@ def main():
     batch_count = 0
     try:
         for i in range(0, args.cluster_count):
-            my_cluster_config = account_config
-
+            my_cluster_config = account_config.copy()
+            
             # if aws accounts were loaded from a file use them. if # of accounts given is less than the
             # requested amount of clusters loop back over it
             if len(aws_accounts) > 0:
+                # If the aws key doesn't exist, create it.
+                if "aws" not in my_cluster_config['ocm'].keys():
+                    my_cluster_config['ocm'].update({'aws': {}})
                 my_cluster_config['ocm']['aws']['account'] = aws_accounts[aws_account_counter]['account']
                 my_cluster_config['ocm']['aws']['accessKey'] = aws_accounts[aws_account_counter]['accessKey']
                 my_cluster_config['ocm']['aws']['secretKey'] = aws_accounts[aws_account_counter]['secretKey']
                 aws_account_counter += 1
                 if aws_account_counter >= len(aws_accounts):
                     aws_account_counter = 0
-
-            logging.info('Starting Cluster thread %d' % i)
-            thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.index,my_uuid,i))
-            cluster_thread_list.append(thread)
-            thread.start()
-
+            
             if args.batch_size != 0:
                 if args.delay_between_batch is None:
                     # We add 2 to the batch size. 1 for the main thread and 1 for the watcher
@@ -401,7 +400,14 @@ def main():
                 else:
                     batch_count += 1
 
-            logging.debug('Thread unlocked')
+            logging.info('Starting Cluster thread %d' % (i + 1))
+            try:
+                thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.index,my_uuid,i))
+            except Exception as err:
+                logging.error(err)
+            cluster_thread_list.append(thread)
+            thread.start()
+
             logging.debug('Number of alive threads %d' % threading.active_count())
     except Exception as err:
         logging.error('Thread creation failed')
