@@ -3,7 +3,7 @@
 ## What does it do?
 
 The osde2e-scale-wrapper provides additional functionality and checks on top of the standard
-osde2e and osde2ectl utilities. 
+osde2e and osde2ectl utilities.
 
 It will download the latest osde2e bits from github, compile the go code, execute the build
 of X clusters with a range of options, monitor the installation/ready status of the clusters,
@@ -65,6 +65,7 @@ without uploading any information**
 | --cleanup-clusters | Cleanup any non-error state clusters upon test completion. | True |
 | --user-override | User to set as the owner. <br>**NOTE: this takes precidence over what is provided in the account-config file** | -- |
 | --aws-account-file | AWS account file that provides account,accessKey,secretKey. This file will be looped over as needed to achieve all clusters requested. Example format: <br> ```0009808111,AAAA53YREVPCS111,00019ILbzo+yWU9C5FG5YrnoZC5eBg2111```<br>```0007006111,AAAAUZRL736SW6111,000P/b94AL+LSCzJBWbZCYRuYArF9Zr111``` | -- |
+| --log-file | File where to write logs. | -- |
 
 ## Account Configuration File
 
