@@ -2,4 +2,4 @@ elasticsearch
 urllib3
 elasticsearch_dsl
 GitPython
-PyYAML
+ruamel.yaml
