@@ -28,7 +28,9 @@ import errno
 import git
 import shutil
 import threading
-import yaml
+from ruamel.yaml import YAML
+
+yaml = YAML()
 
 def _connect_to_es(server, port, es_ssl):
     _es_connection_string = str(server) + ':' + str(port)
@@ -184,7 +186,7 @@ def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay):
     logging.info('Getting status every %d seconds' % int(delay))
 
     yaml.dump(account_config,open(my_path + "/account_config.yaml",'w'))
-    my_config = yaml.safe_load(open(my_path + "/account_config.yaml"))
+    my_config = yaml.load(open(my_path + "/account_config.yaml"))
     my_thread = threading.currentThread()
     cmd = [osde2ectl_cmd, "list", "--custom-config", "account_config.yaml"]
 
@@ -358,7 +360,7 @@ def main():
 
     # load the account config yaml
     try:
-        account_config = yaml.safe_load(open(args.account_config))
+        account_config = yaml.load(open(args.account_config))
     except Exception as err:
         logging.error(err)
         logging.error('Failed to load account configuration yaml')
