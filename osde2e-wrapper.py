@@ -100,14 +100,16 @@ def _index_result(es,my_uuid,index,metadata_path,cluster_start_time,success,time
         exit(1)
     logging.info('ES upload successful for cluster id %s' % my_doc['cluster_id'])
 
+            
 def _create_path(my_path):
     try:
-        logging.info('Create tmp directory if it does not exist')
-        os.makedirs(my_path)
+        logging.info('Create directory %s if it does not exist' % my_path)
+        os.makedirs(my_path, exist_ok=True)
     except OSError as e:
         if e.errno != errno.EEXIST:
             logging.error(e)
             exit(1)
+
 
 # If osde2e command path is provided verify we can run the help function
 # If it is not provided git clone the osde2e repo, build it and validate as above
@@ -327,6 +329,8 @@ def main():
     consolelog.setFormatter(log_format)
     logger.addHandler(consolelog)
     if args.log_file is not None:
+        logging.info('Logging to file: %s' % args.log_file)
+        _create_path(os.path.dirname(args.log_file))
         logfile = logging.FileHandler(args.log_file)
         logfile.setFormatter(log_format)
         logger.addHandler(logfile)
