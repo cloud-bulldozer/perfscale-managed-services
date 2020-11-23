@@ -411,8 +411,10 @@ def main():
     aws_account_counter = 0
     batch_count = 0
     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+    loop_counter = 0
     try:
-        for i in range(0, args.cluster_count):
+        while (loop_counter < args.cluster_count):
+            create_cluster = False
             my_cluster_config = account_config.copy()
             
             # if aws accounts were loaded from a file use them. if # of accounts given is less than the
@@ -434,21 +436,29 @@ def main():
                     while (args.batch_size + 2) <= threading.active_count():
                         # Wait for thread count to drop before creating another
                         time.sleep(1)
+                    loop_counter += 1
+                    create_cluster = True
                 elif batch_count >= args.batch_size:
                     time.sleep(args.delay_between_batch)
                     batch_count = 0
                 else:
                     batch_count += 1
+                    loop_counter += 1
+                    create_cluster = True
+            else:
+                loop_counter += 1
+                create_cluster = True
 
-            logging.info('Starting Cluster thread %d' % (i + 1))
-            try:
-                thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.index,my_uuid,i,timestamp))
-            except Exception as err:
-                logging.error(err)
-            cluster_thread_list.append(thread)
-            thread.start()
+            if create_cluster == True:
+                logging.info('Starting Cluster thread %d' % (loop_counter + 1))
+                try:
+                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.index,my_uuid,loop_counter,timestamp))
+                except Exception as err:
+                    logging.error(err)
+                cluster_thread_list.append(thread)
+                thread.start()
+                logging.debug('Number of alive threads %d' % threading.active_count())
 
-            logging.debug('Number of alive threads %d' % threading.active_count())
     except Exception as err:
         logging.error('Thread creation failed')
 
