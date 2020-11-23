@@ -30,8 +30,6 @@ import shutil
 import threading
 import yaml
 
-logging.basicConfig(level=logging.DEBUG,format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',datefmt='%Y-%m-%d %H:%M:%S')
-
 def _connect_to_es(server, port, es_ssl):
     _es_connection_string = str(server) + ':' + str(port)
     if es_ssl == "true":
@@ -102,14 +100,16 @@ def _index_result(es,my_uuid,index,metadata_path,cluster_start_time,success,time
         exit(1)
     logging.info('ES upload successful for cluster id %s' % my_doc['cluster_id'])
 
+            
 def _create_path(my_path):
     try:
-        logging.info('Create tmp directory if it does not exist')
-        os.makedirs(my_path)
+        logging.info('Create directory %s if it does not exist' % my_path)
+        os.makedirs(my_path, exist_ok=True)
     except OSError as e:
         if e.errno != errno.EEXIST:
             logging.error(e)
             exit(1)
+
 
 # If osde2e command path is provided verify we can run the help function
 # If it is not provided git clone the osde2e repo, build it and validate as above
@@ -311,12 +311,32 @@ def main():
         '--delay-between-batch',
         type=int,
         help='If set it will wait x seconds between each batch request')
+    parser.add_argument(
+        '--log-file',
+        help='File where to write logs')
     args = parser.parse_args()
 
     if args.server is not None and args.port is not None:
         es = _connect_to_es(args.server, args.port, args.sslskipverify)
     else:
         es = None
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    log_format = logging.Formatter(
+            '%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    consolelog = logging.StreamHandler()
+    consolelog.setFormatter(log_format)
+    logger.addHandler(consolelog)
+    if args.log_file is not None:
+        logging.info('Logging to file: %s' % args.log_file)
+        _create_path(os.path.dirname(args.log_file))
+        logfile = logging.FileHandler(args.log_file)
+        logfile.setFormatter(log_format)
+        logger.addHandler(logfile)
+        logging.info('Logging to file: %s' % args.log_file)
+    else:
+        logging.debug('Logging to console')
 
     # global uuid to assign for the group of clusters created. each cluster will have its own cluster-id
     my_uuid = args.uuid
