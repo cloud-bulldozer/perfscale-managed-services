@@ -12,8 +12,8 @@
 #   limitations under the License.
 
 import argparse
-from datetime import datetime
-from elasticsearch_dsl import Search 
+# from datetime import datetime
+# from elasticsearch_dsl import Search
 import elasticsearch
 import time
 import subprocess
@@ -21,12 +21,12 @@ import sys
 import shutil
 import os
 import uuid
-import base64
+# import base64
 import json
 import logging
 import errno
 import git
-import shutil
+# import shutil
 import threading
 from ruamel.yaml import YAML
 
@@ -36,6 +36,7 @@ def _connect_to_es(server, port, es_ssl):
     _es_connection_string = str(server) + ':' + str(port)
     if es_ssl == "true":
         import urllib3
+        import ssl
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
@@ -49,11 +50,12 @@ def _connect_to_es(server, port, es_ssl):
 
 def _index_result(es,my_uuid,index,metadata_path,cluster_start_time,success,timestamp):
     end_time = time.strftime("%Y-%m-%dT%H:%M:%S")
-   
+
     logging.info('Checking if metadata file exists')
     try:
         os.path.exists(metadata_path)
     except Exception as err:
+        logging.error(err)
         logging.error('Expected %s metadata file not found' % metadata_path)
         exit(1)
 
@@ -61,6 +63,7 @@ def _index_result(es,my_uuid,index,metadata_path,cluster_start_time,success,time
     try:
         metadata = json.load(open(metadata_path))
     except Exception as err:
+        logging.error(err)
         logging.error('Failed to load metadata.json file located %s' % metadata_path)
         exit(1)
 
@@ -102,7 +105,7 @@ def _index_result(es,my_uuid,index,metadata_path,cluster_start_time,success,time
         exit(1)
     logging.info('ES upload successful for cluster id %s' % my_doc['cluster_id'])
 
-            
+
 def _create_path(my_path):
     try:
         logging.info('Create directory %s if it does not exist' % my_path)
@@ -127,7 +130,7 @@ def _verify_cmnd(osde2e_cmnd,my_path):
         except git.exc.GitCommandError as err:
             logging.error(err)
             exit(1)
-        
+
         logging.info('Attempting to build osde2e via make build')
         cmd = ["make", "--directory", osde2e_path, "build"]
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -161,8 +164,8 @@ def _verify_cmnd(osde2e_cmnd,my_path):
 def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,timestamp):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
-    
-    # osde2e takes a relative path to the account file so we need to create it in a working dir and 
+
+    # osde2e takes a relative path to the account file so we need to create it in a working dir and
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + str(my_inc)
     os.mkdir(cluster_path)
@@ -221,7 +224,7 @@ def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay):
             logging.info(status.items())
             logging.info('Clusters in error state:')
             logging.info(error)
-                
+
         time.sleep(delay)
     logging.info('Watcher exiting')
 
@@ -232,20 +235,20 @@ def _cleanup_clusters(osde2ectl_cmd,my_path,account_config):
     stdout,stderr = process.communicate()
     error = []
     for line in stdout.splitlines():
-            if account_config['ocm']['userOverride'] in line:
-                state = line.split()[2]
-                cluster_id = line.split()[1]
-                if state != "error" and state != "uninstalling":
-                    logging.debug('Deleting cluster id: %s' % cluster_id)
-                    del_cmd = [osde2ectl_cmd, "--custom-config", "account_config.yaml", "delete", "-i", cluster_id]
-                    process = subprocess.Popen(del_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
-                    stdout,stderr = process.communicate()
-                    if process.returncode != 0:
-                        logging.error('Cluster cleanup failed for cluster id %s with this stdout/stderr:' % cluster_id)
-                        logging.error(stdout)
-                        logging.error(stderr)
-                else:
-                    error.append(cluster_id)
+        if account_config['ocm']['userOverride'] in line:
+            state = line.split()[2]
+            cluster_id = line.split()[1]
+            if state != "error" and state != "uninstalling":
+                logging.debug('Deleting cluster id: %s' % cluster_id)
+                del_cmd = [osde2ectl_cmd, "--custom-config", "account_config.yaml", "delete", "-i", cluster_id]
+                process = subprocess.Popen(del_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
+                stdout,stderr = process.communicate()
+                if process.returncode != 0:
+                    logging.error('Cluster cleanup failed for cluster id %s with this stdout/stderr:' % cluster_id)
+                    logging.error(stdout)
+                    logging.error(stderr)
+            else:
+                error.append(cluster_id)
     logging.info('Clusters in error state. Not deleting:')
     logging.info(error)
 
@@ -255,20 +258,20 @@ def main():
         '-s', '--server',
         help='Provide elastic server information')
     parser.add_argument(
-        '-p', '--port', 
+        '-p', '--port',
         help='Provide elastic port information')
     parser.add_argument(
-        '--sslskipverify', 
+        '--sslskipverify',
         help='if es is setup with ssl, but can disable tls cert verification',
         default=False)
     parser.add_argument(
-        '-u', '--uuid', 
+        '-u', '--uuid',
         help='UUID to provide to elastic')
     parser.add_argument(
-        '-c', '--command', 
+        '-c', '--command',
         help='Full path to the osde2e and osde2ectl command directory. If not provided we will download and compile the latest')
     parser.add_argument(
-        '--path', 
+        '--path',
         help='Path to save temporary data')
     parser.add_argument(
         '--account-config',
@@ -326,7 +329,7 @@ def main():
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
     log_format = logging.Formatter(
-            '%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+        '%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     consolelog = logging.StreamHandler()
     consolelog.setFormatter(log_format)
     logger.addHandler(consolelog)
@@ -418,7 +421,7 @@ def main():
         while (loop_counter < args.cluster_count):
             create_cluster = False
             my_cluster_config = account_config.copy()
-            
+
             # if aws accounts were loaded from a file use them. if # of accounts given is less than the
             # requested amount of clusters loop back over it
             if len(aws_accounts) > 0:
@@ -431,7 +434,7 @@ def main():
                 aws_account_counter += 1
                 if aws_account_counter >= len(aws_accounts):
                     aws_account_counter = 0
-            
+
             if args.batch_size != 0:
                 if args.delay_between_batch is None:
                     # We add 2 to the batch size. 1 for the main thread and 1 for the watcher
@@ -451,7 +454,7 @@ def main():
                 loop_counter += 1
                 create_cluster = True
 
-            if create_cluster == True:
+            if create_cluster:
                 logging.info('Starting Cluster thread %d' % (loop_counter + 1))
                 try:
                     thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.index,my_uuid,loop_counter,timestamp))
@@ -462,6 +465,7 @@ def main():
                 logging.debug('Number of alive threads %d' % threading.active_count())
 
     except Exception as err:
+        logging.error(err)
         logging.error('Thread creation failed')
 
     # Wait for active threads to finish
@@ -485,6 +489,7 @@ def main():
 
     if args.cleanup is True:
         shutil.rmtree(my_path)
+
 
 if __name__ == '__main__':
     sys.exit(main())
