@@ -28,6 +28,7 @@ import errno
 import git
 import shutil
 import threading
+import copy
 from ruamel.yaml import YAML
 
 yaml = YAML()
@@ -426,7 +427,7 @@ def main():
     try:
         while (loop_counter < args.cluster_count):
             create_cluster = False
-            my_cluster_config = account_config.copy()
+            my_cluster_config = copy.deepcopy(account_config)
             
             # if aws accounts were loaded from a file use them. if # of accounts given is less than the
             # requested amount of clusters loop back over it
