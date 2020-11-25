@@ -29,6 +29,8 @@ import git
 import shutil
 import threading
 import copy
+import string
+import random
 from ruamel.yaml import YAML
 
 yaml = YAML()
@@ -428,6 +430,11 @@ def main():
         while (loop_counter < args.cluster_count):
             create_cluster = False
             my_cluster_config = copy.deepcopy(account_config)
+            if "name" in account_config['cluster'].keys():
+                allowed_chars = string.ascii_lowercase + string.digits
+                random_string = ''.join(random.choice(
+                    allowed_chars) for j in range(5))
+                my_cluster_config['cluster']['name'] += "-" + random_string
             
             # if aws accounts were loaded from a file use them. if # of accounts given is less than the
             # requested amount of clusters loop back over it
