@@ -319,6 +319,10 @@ def main():
         '--log-file',
         help='File where to write logs')
     parser.add_argument(
+        '--log-level',
+        default='INFO',
+        help='Log level to show')
+    parser.add_argument(
        '--dry-run',
         dest='dry_run',
         action='store_true',
@@ -331,7 +335,7 @@ def main():
         es = None
 
     logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(args.log_level.upper())
     log_format = logging.Formatter(
             '%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     consolelog = logging.StreamHandler()
@@ -345,7 +349,7 @@ def main():
         logger.addHandler(logfile)
         logging.info('Logging to file: %s' % args.log_file)
     else:
-        logging.debug('Logging to console')
+        logging.info('Logging to console')
 
     # global uuid to assign for the group of clusters created. each cluster will have its own cluster-id
     my_uuid = args.uuid
