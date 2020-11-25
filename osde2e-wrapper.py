@@ -158,7 +158,7 @@ def _verify_cmnd(osde2e_cmnd,my_path):
 
     return osde2e_cmnd
 
-def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,timestamp):
+def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,timestamp,dry_run):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
     
@@ -171,15 +171,16 @@ def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,ti
     cluster_env["REPORT_DIR"] = cluster_path
     logging.info('Attempting cluster installation')
     logging.info('Output directory set to %s' % cluster_path)
-    cluster_cmd = [osde2e_cmnd, "test", "--custom-config", "cluster_account.yaml"]
-    process = subprocess.Popen(cluster_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=cluster_env, cwd=cluster_path)
-    stdout,stderr = process.communicate()
-    if process.returncode != 0:
-        logging.error('Failed to build cluster number %d' % my_inc)
-        logging.error(stderr.strip().decode("utf-8"))
-        success = False
-    if es is not None:
-        _index_result(es,my_uuid,index,cluster_path + "/metadata.json",cluster_start_time,success,timestamp)
+    cluster_cmd = [osde2e_cmnd, "test","--custom-config", "cluster_account.yaml"]
+    if not dry_run:
+        process = subprocess.Popen(cluster_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=cluster_env, cwd=cluster_path)
+        stdout,stderr = process.communicate()
+        if process.returncode != 0:
+            logging.error('Failed to build cluster number %d' % my_inc)
+            logging.error(stderr.strip().decode("utf-8"))
+            success = False
+        if es is not None:
+            _index_result(es,my_uuid,index,cluster_path + "/metadata.json",cluster_start_time,success,timestamp)
 
 def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay):
     logging.info('Watcher thread started')
@@ -316,6 +317,11 @@ def main():
     parser.add_argument(
         '--log-file',
         help='File where to write logs')
+    parser.add_argument(
+       '--dry-run',
+        dest='dry_run',
+        action='store_true',
+        help='Perform a dry-run of the script without creating any cluster')
     args = parser.parse_args()
 
     if args.server is not None and args.port is not None:
@@ -385,11 +391,14 @@ def main():
     cmnd_path = _verify_cmnd(args.command,my_path)
 
     # launch watcher thread to report status
-    logging.info('Launching watcher thread')
-    watcher = threading.Thread(target=_watcher,args=(cmnd_path + "/osde2ectl",account_config,my_path,args.cluster_count,args.watcher_delay))
-    watcher.daemon = True
-    watcher.start()
-    logging.info('Attempting to start %d clusters with %d batch size' % (args.cluster_count,args.batch_size))
+    if not args.dry_run:
+        logging.info('Launching watcher thread')
+        watcher = threading.Thread(target=_watcher,args=(cmnd_path + "/osde2ectl",account_config,my_path,args.cluster_count,args.watcher_delay))
+        watcher.daemon = True
+        watcher.start()
+        logging.info('Attempting to start %d clusters with %d batch size' % (args.cluster_count,args.batch_size))
+    else:
+        logging.info('Dry-run: Watcher thread not started')
 
     # If the aws account file is given, load its data into a list of dictionaries
     aws_accounts = []
@@ -454,7 +463,7 @@ def main():
             if create_cluster == True:
                 logging.info('Starting Cluster thread %d' % (loop_counter + 1))
                 try:
-                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.index,my_uuid,loop_counter,timestamp))
+                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.index,my_uuid,loop_counter,timestamp,args.dry_run))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
@@ -477,8 +486,9 @@ def main():
                 raise
 
     # Stop watcher thread
-    watcher.run = False
-    watcher.join()
+    if not args.dry_run:
+        watcher.run = False
+        watcher.join()
 
     if args.cleanup_clusters is True:
         _cleanup_clusters(cmnd_path + "/osde2ectl",my_path,account_config)
