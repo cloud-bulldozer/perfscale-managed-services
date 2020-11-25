@@ -31,7 +31,10 @@ import threading
 import copy
 from ruamel.yaml import YAML
 
-yaml = YAML()
+yaml = YAML(typ='safe')
+yaml.default_flow_style = False
+yaml.explicit_start = False
+yaml.allow_duplicate_keys = True
 
 def _connect_to_es(server, port, es_ssl):
     _es_connection_string = str(server) + ':' + str(port)
