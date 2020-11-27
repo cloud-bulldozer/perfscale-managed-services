@@ -66,6 +66,8 @@ without uploading any information**
 | --user-override | User to set as the owner. <br>**NOTE: this takes precidence over what is provided in the account-config file** | -- |
 | --aws-account-file | AWS account file that provides account,accessKey,secretKey. This file will be looped over as needed to achieve all clusters requested. Example format: <br> ```0009808111,AAAA53YREVPCS111,00019ILbzo+yWU9C5FG5YrnoZC5eBg2111```<br>```0007006111,AAAAUZRL736SW6111,000P/b94AL+LSCzJBWbZCYRuYArF9Zr111``` | -- |
 | --log-file | File where to write logs. | -- |
+| --log-level | Level of logs to show. | INFO |
+| --dry-run | Perform a dry-run of the script without creating any cluster | False |
 
 ## Account Configuration File
 
