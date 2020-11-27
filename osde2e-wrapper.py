@@ -31,11 +31,6 @@ import threading
 import copy
 from ruamel.yaml import YAML
 
-yaml = YAML(typ='safe')
-yaml.default_flow_style = False
-yaml.explicit_start = False
-yaml.allow_duplicate_keys = True
-
 def _connect_to_es(server, port, es_ssl):
     _es_connection_string = str(server) + ':' + str(port)
     if es_ssl == "true":
@@ -170,6 +165,11 @@ def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,ti
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + str(my_inc)
     os.mkdir(cluster_path)
+    yaml = YAML(pure=True)
+    yaml.default_flow_style = False
+    yaml.explicit_start = False
+    yaml.explicit_end = False
+    yaml.allow_duplicate_keys = True
     yaml.dump(account_config,open(cluster_path + "/cluster_account.yaml",'w'))
     cluster_env = os.environ.copy()
     cluster_env["REPORT_DIR"] = cluster_path
@@ -189,7 +189,11 @@ def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,ti
 def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay):
     logging.info('Watcher thread started')
     logging.info('Getting status every %d seconds' % int(delay))
-
+    yaml = YAML(pure=True)
+    yaml.default_flow_style = False
+    yaml.explicit_start = False
+    yaml.explicit_end = False
+    yaml.allow_duplicate_keys = True
     yaml.dump(account_config,open(my_path + "/account_config.yaml",'w'))
     my_config = yaml.load(open(my_path + "/account_config.yaml"))
     my_thread = threading.currentThread()
@@ -326,7 +330,7 @@ def main():
         default='INFO',
         help='Log level to show')
     parser.add_argument(
-       '--dry-run',
+        '--dry-run',
         dest='dry_run',
         action='store_true',
         help='Perform a dry-run of the script without creating any cluster')
@@ -374,6 +378,7 @@ def main():
 
     # load the account config yaml
     try:
+        yaml = YAML(pure=True)
         account_config = yaml.load(open(args.account_config))
     except Exception as err:
         logging.error(err)
