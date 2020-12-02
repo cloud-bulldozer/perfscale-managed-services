@@ -400,7 +400,7 @@ def main():
         account_config['ocm']['userOverride'] = str(uuid.uuid4())[:8]
     logging.info('User override set to: %s' % account_config['ocm']['userOverride'])
 
-    cmnd_path = _verify_cmnd(args.command,my_path)
+    cmnd_path = _verify_cmnd(args.command,my_path) if not args.dry_run else ""
 
     # launch watcher thread to report status
     if not args.dry_run:
@@ -502,7 +502,7 @@ def main():
         watcher.run = False
         watcher.join()
 
-    if args.cleanup_clusters is True:
+    if args.cleanup_clusters is True and not args.dry_run:
         _cleanup_clusters(cmnd_path + "/osde2ectl",my_path,account_config)
 
     if args.cleanup is True:
