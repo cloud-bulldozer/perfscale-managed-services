@@ -105,3 +105,40 @@ ocm:
     secretKey: BDL9823sd87
 
 ```
+
+## Important things to note
+
+The osde2e-wrapper will create a thread for each cluster you wish to create as well as a watcher thread to track
+the status of the cluster installations.
+
+This can quickly lead to resource constraint if not planned accordingly.
+
+### Memory
+
+While not inately memory instensive itself, the wrapper does call osde2e for each cluster installation. Because of
+this, a system can find itself with memory pressure if running a large number of installations. 
+
+### Max open file limits
+
+Each instance of osde2e that is invoked by this wrapper will open a number of files for writing (~70). Please ensure
+that your maximum open file limit is sufficient for the number of clusters you wish to create.
+
+To increase you maximum hard and soft open file limit you can run:
+
+```
+ulimit -Hn 99999999
+ulimit -Sn 99999999
+```
+
+### Inotify limits
+
+Each instance of osde2e that is invoked by this wrapper uses an instance of inotify. The default max_user_instances
+is usually set low (~128). Please ensure you have enough for 1 per cluster. Additionally, increasing you max_user_watches
+is also advised. Setting each to 20000 should be more than sufficient for a 1000 cluster test.
+
+These values can be changed by running the following.
+
+```
+sysctl user.max_inotify_instances=20000
+sysctl user.max_inotify_watches=20000
+```
