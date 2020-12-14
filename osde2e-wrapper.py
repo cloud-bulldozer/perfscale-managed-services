@@ -172,6 +172,8 @@ def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,ti
     yaml.dump(account_config,open(cluster_path + "/cluster_account.yaml",'w'))
     cluster_env = os.environ.copy()
     cluster_env["REPORT_DIR"] = cluster_path
+    if account_config['ocm']['expiration']:
+        cluster_env["CLUSTER_EXPIRY_IN_MINUTES"] = str(account_config['ocm']['expiration'])
     logging.info('Attempting cluster installation')
     logging.info('Output directory set to %s' % cluster_path)
     cluster_cmd = [osde2e_cmnd, "test","--custom-config", "cluster_account.yaml"]
@@ -306,6 +308,10 @@ def main():
         type=int,
         help='Delay between each status check')
     parser.add_argument(
+        '--expire',
+        type=int,
+        help='Minutes until cluster expires and it is deleted by OSD')
+    parser.add_argument(
         '--cleanup-clusters',
         default=True,
         help='Cleanup any non-error state clusters upon test completion')
@@ -399,6 +405,10 @@ def main():
     elif "userOverride" not in account_config['ocm'].keys():
         account_config['ocm']['userOverride'] = str(uuid.uuid4())[:8]
     logging.info('User override set to: %s' % account_config['ocm']['userOverride'])
+
+    if args.expire is not None:
+        account_config['ocm']['expiration'] = args.expire
+        logging.info('Setting cluster expiration time to: %d' % args.expire)
 
     cmnd_path = _verify_cmnd(args.command,my_path) if not args.dry_run else ""
 
