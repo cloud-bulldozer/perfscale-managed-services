@@ -43,31 +43,15 @@ def _connect_to_es(server, port, es_ssl):
 
     return es
 
-def _index_result(es,my_uuid,index,metadata_path,cluster_start_time,success,timestamp):
-    end_time = time.strftime("%Y-%m-%dT%H:%M:%S")
-
-    logging.info('Checking if metadata file exists')
-    try:
-        os.path.exists(metadata_path)
-    except Exception as err:
-        logging.error(err)
-        logging.error('Expected %s metadata file not found' % metadata_path)
-        exit(1)
-
-    logging.info('Attempting to load metadata json')
-    try:
-        metadata = json.load(open(metadata_path))
-    except Exception as err:
-        logging.error(err)
-        logging.error('Failed to load metadata.json file located %s' % metadata_path)
-        exit(1)
+def _index_result(es,index,metadata):
 
     my_doc = {
-        "timestamp": timestamp,
-        "cluster_start_time": cluster_start_time,
-        "cluster_end_time": end_time,
-        "install_successful": success,
-        "uuid": my_uuid,
+        "timestamp": metadata['timestamp'],
+        "cluster_start_time": metadata['cluster_start_time'],
+        "cluster_end_time": metadata['cluster_end_time'],
+        "install_successful": metadata['install_successful'],
+        "uuid": metadata['uuid'],
+        "install_counter": metadata["install_counter"],
         "cluster_id": metadata['cluster-id'],
         "cluster_name": metadata['cluster-name'],
         "cluster_version": metadata['cluster-version'],
@@ -99,6 +83,7 @@ def _index_result(es,my_uuid,index,metadata_path,cluster_start_time,success,time
         logging.error(repr(e) + "occurred for the json document:")
         exit(1)
     logging.info('ES upload successful for cluster id %s' % my_doc['cluster_id'])
+    return 0
 
 
 def _create_path(my_path):
@@ -156,7 +141,7 @@ def _verify_cmnd(osde2e_cmnd,my_path):
 
     return osde2e_cmnd
 
-def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,timestamp,dry_run):
+def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,dry_run):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
 
@@ -181,12 +166,31 @@ def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,ti
         process = subprocess.Popen(cluster_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=cluster_env, cwd=cluster_path)
         logging.info('Started cluster %d' % my_inc)
         stdout,stderr = process.communicate()
+        cluster_end_time = time.strftime("%Y-%m-%dT%H:%M:%S")
         if process.returncode != 0:
             logging.error('Failed to build cluster number %d' % my_inc)
             logging.error(stderr.strip().decode("utf-8"))
             success = False
+        logging.info('Attempting to load metadata json')
+        try:
+            metadata = json.load(open(cluster_path + "/metadata.json"))
+        except Exception as err:
+            logging.error(err)
+            logging.error('Failed to load metadata.json file located %s' % cluster_path)
+        metadata["cluster_start_time"] = cluster_start_time
+        metadata["cluster_end_time"] = cluster_end_time
+        metadata["install_successful"] = success
+        metadata["uuid"] = my_uuid
+        metadata["install_counter"] = my_inc
+        try:
+            with open(cluster_path + "/metadata.json", "w") as metadata_file:
+                json.dump(metadata, metadata_file)
+        except Exception as err:
+            logging.error(err)
+            logging.error('Failed to write metadata.json file located %s' % cluster_path)
         if es is not None:
-            _index_result(es,my_uuid,index,cluster_path + "/metadata.json",cluster_start_time,success,timestamp)
+            metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            _index_result(es,index,metadata)
 
 def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay):
     logging.info('Watcher thread started')
@@ -281,6 +285,11 @@ def main():
         '-u', '--uuid',
         help='UUID to provide to elastic')
     parser.add_argument(
+        '--es-index-only',
+        dest='es_index_only',
+        action='store_true',
+        help='Do not install any new cluster, just upload to ES all metadata files found on PATH')
+    parser.add_argument(
         '-c', '--command',
         help='Full path to the osde2e and osde2ectl command directory. If not provided we will download and compile the latest')
     parser.add_argument(
@@ -369,6 +378,27 @@ def main():
     else:
         logging.info('Logging to console')
 
+    if args.es_index_only:
+        logging.info('Starting to upload metadata files to elastic')
+        if args.path is not None and es is not None:
+            index_result = 0
+            from pathlib import Path
+            metadata_files = list(Path(args.path).rglob("metadata.json"))
+            logging.debug('Metadata files found: %s' % metadata_files)
+            for metadata_file in metadata_files:
+                logging.info('Attempting to load metadata json %s' % metadata_file)
+                try:
+                    metadata = json.load(open(metadata_file))
+                    metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                except Exception as err:
+                    logging.error(err)
+                    logging.error('Failed to load metadata.json file located %s' % metadata_file)
+                index_result += _index_result(es,args.index,metadata)
+        else:
+            logging.error('PATH and elastic related parameters required when uploading data to elastic')
+            exit(1)
+        exit(index_result)
+
     # global uuid to assign for the group of clusters created. each cluster will have its own cluster-id
     my_uuid = args.uuid
     if my_uuid is None:
@@ -449,7 +479,6 @@ def main():
     cluster_thread_list = []
     aws_account_counter = 0
     batch_count = 0
-    timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
     loop_counter = 0
     try:
         while (loop_counter < args.cluster_count):
@@ -490,7 +519,7 @@ def main():
             if create_cluster:
                 logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
                 try:
-                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.index,my_uuid,loop_counter,timestamp,args.dry_run))
+                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.index,my_uuid,loop_counter,args.dry_run))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
