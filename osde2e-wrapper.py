@@ -172,7 +172,7 @@ def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,ti
     yaml.dump(account_config,open(cluster_path + "/cluster_account.yaml",'w'))
     cluster_env = os.environ.copy()
     cluster_env["REPORT_DIR"] = cluster_path
-    if account_config['ocm']['expiration']:
+    if "expiration" in account_config['ocm'].keys():
         cluster_env["CLUSTER_EXPIRY_IN_MINUTES"] = str(account_config['ocm']['expiration'])
     logging.info('Attempting cluster installation')
     logging.info('Output directory set to %s' % cluster_path)
