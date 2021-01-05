@@ -174,11 +174,12 @@ def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,ti
     cluster_env["REPORT_DIR"] = cluster_path
     if "expiration" in account_config['ocm'].keys():
         cluster_env["CLUSTER_EXPIRY_IN_MINUTES"] = str(account_config['ocm']['expiration'])
-    logging.info('Attempting cluster installation')
-    logging.info('Output directory set to %s' % cluster_path)
+    logging.debug('Attempting cluster installation')
+    logging.debug('Output directory set to %s' % cluster_path)
     cluster_cmd = [osde2e_cmnd, "test","--custom-config", "cluster_account.yaml"]
     if not dry_run:
         process = subprocess.Popen(cluster_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=cluster_env, cwd=cluster_path)
+        logging.info('Started cluster %d' % my_inc)
         stdout,stderr = process.communicate()
         if process.returncode != 0:
             logging.error('Failed to build cluster number %d' % my_inc)
@@ -482,7 +483,7 @@ def main():
                 create_cluster = True
 
             if create_cluster:
-                logging.info('Starting Cluster thread %d' % (loop_counter + 1))
+                logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
                 try:
                     thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.index,my_uuid,loop_counter,timestamp,args.dry_run))
                 except Exception as err:
@@ -496,7 +497,7 @@ def main():
         logging.error('Thread creation failed')
 
     # Wait for active threads to finish
-    logging.info('All clusters requested. Waiting for them to finish')
+    logging.info('All clusters (%d) requested. Waiting for them to finish' % len(cluster_thread_list))
     for t in cluster_thread_list:
         try:
             t.join()
