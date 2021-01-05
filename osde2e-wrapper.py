@@ -224,14 +224,19 @@ def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay):
                     error.append(line.split()[1])
                     logging.debug(line.split()[1])
 
-        logging.info('Requested Clusters: %d' % cluster_count)
         if cluster_count != 0:
-            logging.info('Current state counts:')
-            logging.info(state.items())
-            logging.info('Current status counts:')
-            logging.info(status.items())
-            logging.info('Clusters in error state:')
-            logging.info(error)
+            logging.debug(state.items())
+            logging.debug(status.items())
+            state_output = "Current clusters state: " + str(cluster_count) + " clusters"
+            status_output = "Current clusters status: " + str(cluster_count) + " clusters"
+            for i1 in state.items():
+                state_output += " (" + str(i1[0]) + ": " + str(i1[1]) + ")"
+            for i2 in status.items():
+                status_output += " (" + str(i2[0]) + ": " + str(i2[1]) + ")"
+            logging.info(state_output)
+            logging.info(status_output)
+            if error:
+                logging.warning('Clusters in error state: %s' % error)
 
         time.sleep(delay)
     logging.info('Watcher exiting')
