@@ -43,7 +43,7 @@ def _connect_to_es(server, port, es_ssl):
 
     return es
 
-def _index_result(es,index,metadata):
+def _index_result(es,index,metadata,index_retry):
 
     my_doc = {
         "timestamp": metadata['timestamp'],
@@ -76,14 +76,20 @@ def _index_result(es,index,metadata):
     logging.debug('Document to be uploaded to ES:')
     logging.debug(my_doc)
 
-    logging.info('Attempting to upload information to ES server with index %s' % index)
-    try:
-        es.index(index=index, body=my_doc)
-    except Exception as e:
-        logging.error(repr(e) + "occurred for the json document:")
-        exit(1)
-    logging.info('ES upload successful for cluster id %s' % my_doc['cluster_id'])
-    return 0
+    for attempt in range(index_retry + 1):
+        try:
+            time.sleep(5 * attempt)
+            logging.info('Attempting to upload (Attempt: %d) information to ES server with index %s' % (attempt, index))
+            es.index(index=index, body=my_doc)
+        except Exception as e:
+            logging.error(e)
+            logging.error('Failed to upload to ES, waiting %d seconds for next upload retry' % (5 * (attempt + 1)))
+        else:
+            logging.info('ES upload successful for cluster id %s' % my_doc['cluster_id'])
+            return 0
+    else:
+        logging.error('Reached the maximun number of retries: %d, ES upload failed for %s' % (index_retry, my_doc['cluster_id']))
+        return 1
 
 
 def _create_path(my_path):
@@ -141,7 +147,7 @@ def _verify_cmnd(osde2e_cmnd,my_path):
 
     return osde2e_cmnd
 
-def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,dry_run):
+def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,dry_run,index_retry):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
 
@@ -189,7 +195,7 @@ def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,dr
             logging.error('Failed to write metadata.json file located %s' % cluster_path)
         if es is not None:
             metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-            _index_result(es,index,metadata)
+            _index_result(es,index,metadata,index_retry)
 
 def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay):
     logging.info('Watcher thread started')
@@ -278,6 +284,11 @@ def main():
     parser.add_argument(
         '-u', '--uuid',
         help='UUID to provide to elastic')
+    parser.add_argument(
+        '--index-retry',
+        help='Number of retries (default: 5) on ES uploading. The time between retries increases exponentially',
+        default=5,
+        type=int)
     parser.add_argument(
         '--es-index-only',
         dest='es_index_only',
@@ -387,7 +398,7 @@ def main():
                 except Exception as err:
                     logging.error(err)
                     logging.error('Failed to load metadata.json file located %s' % metadata_file)
-                index_result += _index_result(es,args.index,metadata)
+                index_result += _index_result(es,args.index,metadata,args.index_retry)
         else:
             logging.error('PATH and elastic related parameters required when uploading data to elastic')
             exit(1)
@@ -513,7 +524,7 @@ def main():
             if create_cluster:
                 logging.info('Starting Cluster thread %d' % (loop_counter + 1))
                 try:
-                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.index,my_uuid,loop_counter,args.dry_run))
+                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.index,my_uuid,loop_counter,args.dry_run,args.index_retry))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
