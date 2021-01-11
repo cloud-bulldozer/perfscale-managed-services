@@ -47,8 +47,8 @@ without uploading any information**
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| --es-connection | The elasticsearch server URL, including protocol and port (if required)| -- |
-| --es-insecure | sslskipverify | If ES is setup with ssl, but can disable tls cert verification | False |
+| --es-url | The elasticsearch server URL, including protocol and port (if required)| -- |
+| --es-insecure | If ES is setup with ssl, but can disable tls cert verification | False |
 | --es-index | The index to write to. | osde2e-install-timings |
 | --es-index-retry | Number of retries to connect to ES | 5 |
 | --es-index-only | Upload all metadata.json files found under PATH to elasticsearch | -- |

@@ -27,8 +27,8 @@ import threading
 import copy
 from ruamel.yaml import YAML
 
-def _connect_to_es(connection, insecure):
-    if connection.startswith('https://'):
+def _connect_to_es(es_url, insecure):
+    if es_url.startswith('https://'):
         import urllib3
         import ssl
         ssl_ctx = ssl.create_default_context()
@@ -36,15 +36,14 @@ def _connect_to_es(connection, insecure):
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
             ssl_ctx.check_hostname = False
             ssl_ctx.verify_mode = ssl.CERT_NONE
-        es = elasticsearch.Elasticsearch([connection], send_get_body_as='POST',
+        es = elasticsearch.Elasticsearch([es_url], send_get_body_as='POST',
                                          ssl_context=ssl_ctx, use_ssl=True)
-    elif connection.startswith('http://'):
-        es = elasticsearch.Elasticsearch([connection], send_get_body_as='POST')
+    elif es_url.startswith('http://'):
+        es = elasticsearch.Elasticsearch([es_url], send_get_body_as='POST')
     else:
-        logging.error('Invalid ES connection URL: %s' % connection)
+        logging.error('Invalid ES URL: %s' % es_url)
         exit(1)
     return es
-
 
 def _index_result(es,index,metadata,index_retry):
     my_doc = {
@@ -93,7 +92,6 @@ def _index_result(es,index,metadata,index_retry):
         logging.error('Reached the maximun number of retries: %d, ES upload failed for %s' % (index_retry, my_doc['cluster_id']))
         return 1
 
-
 def _create_path(my_path):
     try:
         logging.info('Create directory %s if it does not exist' % my_path)
@@ -102,7 +100,6 @@ def _create_path(my_path):
         if e.errno != errno.EEXIST:
             logging.error(e)
             exit(1)
-
 
 # If osde2e command path is provided verify we can run the help function
 # If it is not provided git clone the osde2e repo, build it and validate as above
@@ -146,9 +143,7 @@ def _verify_cmnd(osde2e_cmnd,my_path):
         logging.error(stderr.strip().decode("utf-8"))
         exit(1)
     logging.info('osde2e and osde2ectl commands validated with -h. Directory is %s' % osde2e_cmnd)
-
     return osde2e_cmnd
-
 
 def _download_kubeconfig(osde2ectl_cmd,my_path):
     logging.info('Attempting to load metadata json')
@@ -171,7 +166,6 @@ def _download_kubeconfig(osde2ectl_cmd,my_path):
         logging.error('Failed to download kubeconfig file for cluster id %s with this stdout/stderr:' % cluster_id)
         logging.error(stdout)
         logging.error(stderr)
-
 
 def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,timestamp,dry_run,index_retry):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -224,7 +218,6 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
         if es is not None:
             metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
             _index_result(es,index,metadata,index_retry)
-
 
 def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay,my_uuid):
     logging.info('Watcher thread started')
@@ -307,7 +300,7 @@ def _cleanup_clusters(osde2ectl_cmd,my_path,account_config):
 def main():
     parser = argparse.ArgumentParser(description="osde2e wrapper script")
     parser.add_argument(
-        '--es-connection',
+        '--es-url',
         help='Provide ES connection URL')
     parser.add_argument(
         '--es-insecure',
@@ -331,16 +324,6 @@ def main():
     parser.add_argument(
         '--uuid',
         help='UUID to provide to ES')
-    parser.add_argument(
-        '--index-retry',
-        help='Number of retries (default: 5) on ES uploading. The time between retries increases exponentially',
-        default=5,
-        type=int)
-    parser.add_argument(
-        '--es-index-only',
-        dest='es_index_only',
-        action='store_true',
-        help='Do not install any new cluster, just upload to ES all metadata files found on PATH')
     parser.add_argument(
         '-c', '--command',
         help='Full path to the osde2e and osde2ectl command directory. If not provided we will download and compile the latest')
@@ -404,8 +387,8 @@ def main():
         help='Perform a dry-run of the script without creating any cluster')
     args = parser.parse_args()
 
-    if args.es_connection is not None:
-        es = _connect_to_es(args.es_connection, args.es_insecure)
+    if args.es_url is not None:
+        es = _connect_to_es(args.es_url, args.es_insecure)
     else:
         es = None
 
