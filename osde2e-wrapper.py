@@ -225,7 +225,7 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
             metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
             _index_result(es,index,metadata,index_retry)
 
-            
+
 def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay,my_uuid):
     logging.info('Watcher thread started')
     logging.info('Getting status every %d seconds' % int(delay))
