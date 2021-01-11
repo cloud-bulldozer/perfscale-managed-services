@@ -47,7 +47,6 @@ def _connect_to_es(connection, insecure):
 
 
 def _index_result(es,index,metadata,index_retry):
-
     my_doc = {
         "timestamp": metadata['timestamp'],
         "cluster_start_time": metadata['cluster_start_time'],
@@ -150,7 +149,31 @@ def _verify_cmnd(osde2e_cmnd,my_path):
 
     return osde2e_cmnd
 
-def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,dry_run,index_retry):
+
+def _download_kubeconfig(osde2ectl_cmd,my_path):
+    logging.info('Attempting to load metadata json')
+    try:
+        metadata = json.load(open(my_path + "/metadata.json"))
+        cluster_id = metadata['cluster-id']
+    except Exception as err:
+        logging.error(err)
+        logging.error('Failed to load metadata.json file located %s, kubeconfig file wont be downloaded' % my_path)
+        return 0
+
+    # required to create a new folder on kubeconfig_path until https://github.com/openshift/osde2e/issues/657 will be fixed
+    kubeconfig_path = my_path + "/" + cluster_id
+    logging.info('Downloading kubeconfig file for cluster %s on %s' % (cluster_id,kubeconfig_path))
+    cmd = [osde2ectl_cmd, "--custom-config", "cluster_account.yaml", "get", "-k", "-i", cluster_id, "--kube-config-path", kubeconfig_path]
+    logging.debug(cmd)
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
+    stdout,stderr = process.communicate()
+    if process.returncode != 0:
+        logging.error('Failed to download kubeconfig file for cluster id %s with this stdout/stderr:' % cluster_id)
+        logging.error(stdout)
+        logging.error(stderr)
+
+
+def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,timestamp,dry_run,index_retry):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
 
@@ -168,11 +191,12 @@ def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,dr
     cluster_env["REPORT_DIR"] = cluster_path
     if "expiration" in account_config['ocm'].keys():
         cluster_env["CLUSTER_EXPIRY_IN_MINUTES"] = str(account_config['ocm']['expiration'])
-    logging.info('Attempting cluster installation')
-    logging.info('Output directory set to %s' % cluster_path)
+    logging.debug('Attempting cluster installation')
+    logging.debug('Output directory set to %s' % cluster_path)
     cluster_cmd = [osde2e_cmnd, "test","--custom-config", "cluster_account.yaml"]
     if not dry_run:
         process = subprocess.Popen(cluster_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=cluster_env, cwd=cluster_path)
+        logging.info('Started cluster %d' % my_inc)
         stdout,stderr = process.communicate()
         cluster_end_time = time.strftime("%Y-%m-%dT%H:%M:%S")
         if process.returncode != 0:
@@ -196,11 +220,13 @@ def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,dr
         except Exception as err:
             logging.error(err)
             logging.error('Failed to write metadata.json file located %s' % cluster_path)
+        _download_kubeconfig(osde2ectl_cmd, cluster_path)
         if es is not None:
             metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
             _index_result(es,index,metadata,index_retry)
 
-def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay):
+            
+def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay,my_uuid):
     logging.info('Watcher thread started')
     logging.info('Getting status every %d seconds' % int(delay))
     yaml = YAML(pure=True)
@@ -236,14 +262,20 @@ def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay):
                     error.append(line.split()[1])
                     logging.debug(line.split()[1])
 
-        logging.info('Requested Clusters: %d' % cluster_count)
+        logging.info('Requested Clusters for test %s: %d' % (my_uuid,cluster_count))
         if cluster_count != 0:
-            logging.info('Current state counts:')
-            logging.info(state.items())
-            logging.info('Current status counts:')
-            logging.info(status.items())
-            logging.info('Clusters in error state:')
-            logging.info(error)
+            logging.debug(state.items())
+            logging.debug(status.items())
+            state_output = "Current clusters state: " + str(cluster_count) + " clusters"
+            status_output = "Current clusters status: " + str(cluster_count) + " clusters"
+            for i1 in state.items():
+                state_output += " (" + str(i1[0]) + ": " + str(i1[1]) + ")"
+            for i2 in status.items():
+                status_output += " (" + str(i2[0]) + ": " + str(i2[1]) + ")"
+            logging.info(state_output)
+            logging.info(status_output)
+            if error:
+                logging.warning('Clusters in error state: %s' % error)
 
         time.sleep(delay)
     logging.info('Watcher exiting')
@@ -299,6 +331,16 @@ def main():
     parser.add_argument(
         '--uuid',
         help='UUID to provide to ES')
+    parser.add_argument(
+        '--index-retry',
+        help='Number of retries (default: 5) on ES uploading. The time between retries increases exponentially',
+        default=5,
+        type=int)
+    parser.add_argument(
+        '--es-index-only',
+        dest='es_index_only',
+        action='store_true',
+        help='Do not install any new cluster, just upload to ES all metadata files found on PATH')
     parser.add_argument(
         '-c', '--command',
         help='Full path to the osde2e and osde2ectl command directory. If not provided we will download and compile the latest')
@@ -414,13 +456,23 @@ def main():
     my_path = args.path
     if my_path is None:
         my_path = '/tmp/' + my_uuid
-    logging.info('Using %s as temp directory' % (my_path))
+    logging.info('Using %s as working directory' % (my_path))
     _create_path(my_path)
 
     if os.path.exists(args.account_config):
         logging.debug('Account configuration file exists')
     else:
         logging.error('Account configuration file not found at %s' % args.account_config)
+        exit(1)
+
+    try:
+        logging.debug('Saving test UUID to the working directory')
+        uuid_file = open(my_path + '/uuid','x')
+        uuid_file.write(my_uuid)
+        uuid_file.close()
+    except Exception as err:
+        logging.debug('Cannot write file %s/uuid' % my_path)
+        logging.error(err)
         exit(1)
 
     # load the account config yaml
@@ -457,7 +509,7 @@ def main():
     # launch watcher thread to report status
     if not args.dry_run:
         logging.info('Launching watcher thread')
-        watcher = threading.Thread(target=_watcher,args=(cmnd_path + "/osde2ectl",account_config,my_path,args.cluster_count,args.watcher_delay))
+        watcher = threading.Thread(target=_watcher,args=(cmnd_path + "/osde2ectl",account_config,my_path,args.cluster_count,args.watcher_delay,my_uuid))
         watcher.daemon = True
         watcher.start()
         logging.info('Attempting to start %d clusters with %d batch size' % (args.cluster_count,args.batch_size))
@@ -523,9 +575,10 @@ def main():
                 create_cluster = True
 
             if create_cluster:
-                logging.info('Starting Cluster thread %d' % (loop_counter + 1))
+                logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
                 try:
-                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,args.dry_run,args.es_index_retry))
+                    timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,timestamp,args.dry_run,args.es_index_retry))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
@@ -537,7 +590,7 @@ def main():
         logging.error('Thread creation failed')
 
     # Wait for active threads to finish
-    logging.info('All clusters requested. Waiting for them to finish')
+    logging.info('All clusters (%d) requested. Waiting for them to finish' % len(cluster_thread_list))
     for t in cluster_thread_list:
         try:
             t.join()
