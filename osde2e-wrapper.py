@@ -192,7 +192,7 @@ def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,dr
             metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
             _index_result(es,index,metadata)
 
-def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay):
+def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay,my_uuid):
     logging.info('Watcher thread started')
     logging.info('Getting status every %d seconds' % int(delay))
     yaml = YAML(pure=True)
@@ -228,6 +228,7 @@ def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay):
                     error.append(line.split()[1])
                     logging.debug(line.split()[1])
 
+        logging.info('Requested Clusters for test %s: %d' % (my_uuid,cluster_count))
         if cluster_count != 0:
             logging.debug(state.items())
             logging.debug(status.items())
@@ -408,13 +409,23 @@ def main():
     my_path = args.path
     if my_path is None:
         my_path = '/tmp/' + my_uuid
-    logging.info('Using %s as temp directory' % (my_path))
+    logging.info('Using %s as working directory' % (my_path))
     _create_path(my_path)
 
     if os.path.exists(args.account_config):
         logging.debug('Account configuration file exists')
     else:
         logging.error('Account configuration file not found at %s' % args.account_config)
+        exit(1)
+
+    try:
+        logging.debug('Saving test UUID to the working directory')
+        uuid_file = open(my_path + '/uuid','x')
+        uuid_file.write(my_uuid)
+        uuid_file.close()
+    except Exception as err:
+        logging.debug('Cannot write file %s/uuid' % my_path)
+        logging.error(err)
         exit(1)
 
     # load the account config yaml
@@ -451,7 +462,7 @@ def main():
     # launch watcher thread to report status
     if not args.dry_run:
         logging.info('Launching watcher thread')
-        watcher = threading.Thread(target=_watcher,args=(cmnd_path + "/osde2ectl",account_config,my_path,args.cluster_count,args.watcher_delay))
+        watcher = threading.Thread(target=_watcher,args=(cmnd_path + "/osde2ectl",account_config,my_path,args.cluster_count,args.watcher_delay,my_uuid))
         watcher.daemon = True
         watcher.start()
         logging.info('Attempting to start %d clusters with %d batch size' % (args.cluster_count,args.batch_size))
