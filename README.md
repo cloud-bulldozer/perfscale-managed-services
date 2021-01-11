@@ -8,7 +8,9 @@ osde2e and osde2ectl utilities.
 It will download the latest osde2e bits from github, compile the go code, execute the build
 of X clusters with a range of options, monitor the installation/ready status of the clusters,
 upload the resultant timeing data that is provided into Elasticsearch and then cleanup any
-non-errored clusters. Errored clusters are left to allow additional diagnosis
+non-errored clusters. Errored clusters are left to allow additional diagnosis.
+After each cluster installation, kubeconfig file for that cluster will be downloaded and located
+on its own folder.
 
 Example invocation:
 

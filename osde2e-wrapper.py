@@ -141,7 +141,29 @@ def _verify_cmnd(osde2e_cmnd,my_path):
 
     return osde2e_cmnd
 
-def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,dry_run):
+def _download_kubeconfig(osde2ectl_cmd,my_path):
+    logging.info('Attempting to load metadata json')
+    try:
+        metadata = json.load(open(my_path + "/metadata.json"))
+        cluster_id = metadata['cluster-id']
+    except Exception as err:
+        logging.error(err)
+        logging.error('Failed to load metadata.json file located %s, kubeconfig file wont be downloaded' % my_path)
+        return 0
+
+    # required to create a new folder on kubeconfig_path until https://github.com/openshift/osde2e/issues/657 will be fixed
+    kubeconfig_path = my_path + "/" + cluster_id
+    logging.info('Downloading kubeconfig file for cluster %s on %s' % (cluster_id,kubeconfig_path))
+    cmd = [osde2ectl_cmd, "--custom-config", "cluster_account.yaml", "get", "-k", "-i", cluster_id, "--kube-config-path", kubeconfig_path]
+    logging.debug(cmd)
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
+    stdout,stderr = process.communicate()
+    if process.returncode != 0:
+        logging.error('Failed to download kubeconfig file for cluster id %s with this stdout/stderr:' % cluster_id)
+        logging.error(stdout)
+        logging.error(stderr)
+
+def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,timestamp,dry_run):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
 
@@ -188,6 +210,7 @@ def _build_cluster(osde2e_cmnd,account_config,my_path,es,index,my_uuid,my_inc,dr
         except Exception as err:
             logging.error(err)
             logging.error('Failed to write metadata.json file located %s' % cluster_path)
+        _download_kubeconfig(osde2ectl_cmd, cluster_path)
         if es is not None:
             metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
             _index_result(es,index,metadata)
@@ -530,7 +553,8 @@ def main():
             if create_cluster:
                 logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
                 try:
-                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e",my_cluster_config,my_path,es,args.index,my_uuid,loop_counter,args.dry_run))
+                    timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.index,my_uuid,loop_counter,timestamp,args.dry_run))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
