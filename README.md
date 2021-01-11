@@ -51,6 +51,8 @@ without uploading any information**
 | --port | The elasticsearch port | -- |
 | --sslskipverify | If elasticsearch is setup with ssl we can disable tls cert verification. | False |
 | --index | The index to write to. | osde2e-install-timings |
+| --index-retry | Number of retries to connect to ES | 5 |
+
 | --es-index-only | Upload all metadata.json files found under PATH to elasticsearch | -- |
 
 ### Optional variables:
