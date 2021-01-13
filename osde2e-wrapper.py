@@ -27,24 +27,25 @@ import threading
 import copy
 from ruamel.yaml import YAML
 
-def _connect_to_es(server, port, es_ssl):
-    _es_connection_string = str(server) + ':' + str(port)
-    if es_ssl == "true":
+def _connect_to_es(es_url, insecure):
+    if es_url.startswith('https://'):
         import urllib3
         import ssl
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         ssl_ctx = ssl.create_default_context()
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.CERT_NONE
-        es = elasticsearch.Elasticsearch([_es_connection_string], send_get_body_as='POST',
+        if insecure:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
+        es = elasticsearch.Elasticsearch([es_url], send_get_body_as='POST',
                                          ssl_context=ssl_ctx, use_ssl=True)
+    elif es_url.startswith('http://'):
+        es = elasticsearch.Elasticsearch([es_url], send_get_body_as='POST')
     else:
-        es = elasticsearch.Elasticsearch([_es_connection_string], send_get_body_as='POST')
-
+        logging.error('Invalid ES URL: %s' % es_url)
+        exit(1)
     return es
 
 def _index_result(es,index,metadata,index_retry):
-
     my_doc = {
         "timestamp": metadata['timestamp'],
         "cluster_start_time": metadata['cluster_start_time'],
@@ -91,7 +92,6 @@ def _index_result(es,index,metadata,index_retry):
         logging.error('Reached the maximun number of retries: %d, ES upload failed for %s' % (index_retry, my_doc['cluster_id']))
         return 1
 
-
 def _create_path(my_path):
     try:
         logging.info('Create directory %s if it does not exist' % my_path)
@@ -100,7 +100,6 @@ def _create_path(my_path):
         if e.errno != errno.EEXIST:
             logging.error(e)
             exit(1)
-
 
 # If osde2e command path is provided verify we can run the help function
 # If it is not provided git clone the osde2e repo, build it and validate as above
@@ -144,7 +143,6 @@ def _verify_cmnd(osde2e_cmnd,my_path):
         logging.error(stderr.strip().decode("utf-8"))
         exit(1)
     logging.info('osde2e and osde2ectl commands validated with -h. Directory is %s' % osde2e_cmnd)
-
     return osde2e_cmnd
 
 def _download_kubeconfig(osde2ectl_cmd,my_path):
@@ -302,20 +300,19 @@ def _cleanup_clusters(osde2ectl_cmd,my_path,account_config):
 def main():
     parser = argparse.ArgumentParser(description="osde2e wrapper script")
     parser.add_argument(
-        '-s', '--server',
-        help='Provide elastic server information')
+        '--es-url',
+        help='Provide ES connection URL')
     parser.add_argument(
-        '-p', '--port',
-        help='Provide elastic port information')
+        '--es-insecure',
+        dest='es_insecure',
+        action='store_true',
+        help='if ES is setup with ssl, but can disable tls cert verification')
     parser.add_argument(
-        '--sslskipverify',
-        help='if es is setup with ssl, but can disable tls cert verification',
-        default=False)
+        '--es-index',
+        help='The index to write to',
+        default='osde2e-install-timings')
     parser.add_argument(
-        '-u', '--uuid',
-        help='UUID to provide to elastic')
-    parser.add_argument(
-        '--index-retry',
+        '--es-index-retry',
         help='Number of retries (default: 5) on ES uploading. The time between retries increases exponentially',
         default=5,
         type=int)
@@ -324,6 +321,9 @@ def main():
         dest='es_index_only',
         action='store_true',
         help='Do not install any new cluster, just upload to ES all metadata files found on PATH')
+    parser.add_argument(
+        '--uuid',
+        help='UUID to provide to ES')
     parser.add_argument(
         '-c', '--command',
         help='Full path to the osde2e and osde2ectl command directory. If not provided we will download and compile the latest')
@@ -338,10 +338,6 @@ def main():
         '--cleanup',
         help='Should we delete the temporary directory',
         default=False)
-    parser.add_argument(
-        '-i', '--index',
-        help='The index to write to',
-        default='osde2e-install-timings')
     parser.add_argument(
         '--cluster-count',
         default=1,
@@ -391,8 +387,8 @@ def main():
         help='Perform a dry-run of the script without creating any cluster')
     args = parser.parse_args()
 
-    if args.server is not None and args.port is not None:
-        es = _connect_to_es(args.server, args.port, args.sslskipverify)
+    if args.es_url is not None:
+        es = _connect_to_es(args.es_url, args.es_insecure)
     else:
         es = None
 
@@ -428,7 +424,7 @@ def main():
                 except Exception as err:
                     logging.error(err)
                     logging.error('Failed to load metadata.json file located %s' % metadata_file)
-                index_result += _index_result(es,args.index,metadata,args.index_retry)
+                index_result += _index_result(es,args.es_index,metadata,args.es_index_retry)
         else:
             logging.error('PATH and elastic related parameters required when uploading data to elastic')
             exit(1)
@@ -565,7 +561,7 @@ def main():
                 logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
                 try:
                     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.index,my_uuid,loop_counter,timestamp,args.dry_run,args.index_retry))
+                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,timestamp,args.dry_run,args.es_index_retry))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
