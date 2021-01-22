@@ -46,33 +46,42 @@ def _connect_to_es(es_url, insecure):
     return es
 
 def _index_result(es,index,metadata,index_retry):
-    my_doc = {
-        "timestamp": metadata['timestamp'],
-        "cluster_start_time": metadata['cluster_start_time'],
-        "cluster_end_time": metadata['cluster_end_time'],
-        "install_successful": metadata['install_successful'],
-        "uuid": metadata['uuid'],
-        "install_counter": metadata["install_counter"],
-        "cluster_id": metadata['cluster-id'],
-        "cluster_name": metadata['cluster-name'],
-        "cluster_version": metadata['cluster-version'],
-        "environment": metadata['environment'],
-        "region": metadata['region'],
-        "time_to_ocm_reporting_installed": int(float(metadata['time-to-ocm-reporting-installed'])),
-        "time_to_cluster_ready": int(float(metadata['time-to-cluster-ready'])),
-        "time_to_upgraded_cluster": int(float(metadata['time-to-upgraded-cluster'])),
-        "time_to_upgraded_cluster_ready": int(float(metadata['time-to-upgraded-cluster-ready'])),
-        "time_to_certificate_issued": int(float(metadata['time-to-certificate-issued'])),
-        "install_phase_pass_rate": metadata['install-phase-pass-rate'],
-        "upgrade_phase_pass_rate": metadata['upgrade-phase-pass-rate'],
-        "log_metrics": {
-            "access_token_500": metadata['log-metrics']['access-token-500'],
-            "cluster_mgmt_500": metadata['log-metrics']['cluster-mgmt-500'],
-            "cluster_pending": metadata['log-metrics']['cluster-pending'],
-            "eof": metadata['log-metrics']['eof'],
-            "host_dns_lookup": metadata['log-metrics']['host-dns-lookup']
-        }
-    }
+    def key_exists(key,dict):
+        if key in dict:
+            return dict[key]
+        else:
+            return ""
+    try:
+        my_doc = {}
+        my_doc['timestamp'] = key_exists('timestamp',metadata)
+        my_doc['cluster_start_time'] = key_exists('cluster_start_time',metadata)
+        my_doc['cluster_end_time'] = key_exists('cluster_end_time',metadata)
+        my_doc['install_successful'] = key_exists('install_successful',metadata)
+        my_doc['uuid"'] = key_exists('uuid',metadata)
+        my_doc['install_counter'] = key_exists('install_counter',metadata)
+        my_doc['cluster_id'] = key_exists('cluster_id',metadata)
+        my_doc['cluster_name'] = key_exists('cluster_name',metadata)
+        # cluster version: https://issues.redhat.com/browse/SDA-3601
+        my_doc['cluster_version'] = key_exists('cluster-version',metadata)
+        my_doc['environment'] = key_exists('environment',metadata)
+        my_doc['region'] = key_exists('region',metadata)
+        my_doc['details_url'] = key_exists('details_url',metadata)
+        my_doc['time_to_ocm_reporting_installed'] = int(float(key_exists('time-to-ocm-reporting-installed',metadata))) if key_exists('time-to-ocm-reporting-installed',metadata).isnumeric() else ""
+        my_doc['time_to_cluster_ready'] = int(float(key_exists('time-to-cluster-ready',metadata))) if key_exists('time-to-cluster-ready',metadata).isnumeric() else ""
+        my_doc['time_to_upgraded_cluster'] = int(float(key_exists('time-to-upgraded-cluster',metadata))) if key_exists('time-to-upgraded-cluster',metadata).isnumeric() else ""
+        my_doc['time_to_upgraded_cluster_ready'] = int(float(key_exists('time-to-upgraded-cluster-ready',metadata))) if key_exists('time-to-upgraded-cluster-ready',metadata).isnumeric() else ""
+        my_doc['time_to_certificate_issued'] = int(float(key_exists('time-to-certificate-issued',metadata))) if key_exists('time-to-certificate-issued',metadata).isnumeric() else ""
+        my_doc['install_phase_pass_rate'] = key_exists('install-phase-pass-rate',metadata)
+        my_doc['upgrade_phase_pass_rate'] = key_exists('upgrade-phase-pass-rate',metadata)
+        if 'log-metrics' in metadata:
+            my_doc['log_metrics']['access_token_500'] = key_exists('access-token-500',metadata['log-metrics'])
+            my_doc['log_metrics']['cluster_mgmt_500'] = key_exists('cluster-mgmt-500',metadata['log-metrics'])
+            my_doc['log_metrics']['cluster_pending'] = key_exists('cluster-pending',metadata['log-metrics'])
+            my_doc['log_metrics']['eof'] = key_exists('eof',metadata['log-metrics'])
+            my_doc['log_metrics']['host_dns_lookup'] = key_exists('host_dns_lookup',metadata['log-metrics'])
+    except KeyError as e:
+        logging.error('Cannot build document to upload to ES')
+        logging.error(e)
 
     logging.debug('Document to be uploaded to ES:')
     logging.debug(my_doc)
