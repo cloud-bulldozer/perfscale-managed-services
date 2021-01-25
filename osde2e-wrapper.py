@@ -300,6 +300,9 @@ def _cleanup_clusters(osde2ectl_cmd,my_path,account_config):
 def main():
     parser = argparse.ArgumentParser(description="osde2e wrapper script")
     parser.add_argument(
+        '--account-config',
+        help='Yaml account config')
+    parser.add_argument(
         '--es-url',
         help='Provide ES connection URL')
     parser.add_argument(
@@ -330,10 +333,6 @@ def main():
     parser.add_argument(
         '--path',
         help='Path to save temporary data')
-    parser.add_argument(
-        '--account-config',
-        required=True,
-        help='Yaml account config')
     parser.add_argument(
         '--cleanup',
         help='Should we delete the temporary directory',
@@ -392,6 +391,9 @@ def main():
         help='Do not execute health checks after cluster installation'
     )
     args = parser.parse_args()
+
+    if not args.es_index_only and not args.account_config:
+        parser.error('the following arguments are required: --account-config')
 
     if args.es_url is not None:
         es = _connect_to_es(args.es_url, args.es_insecure)
