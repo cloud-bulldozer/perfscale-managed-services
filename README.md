@@ -72,6 +72,7 @@ without uploading any information**
 | --log-file | File where to write logs. | -- |
 | --log-level | Level of logs to show. | INFO |
 | --dry-run | Perform a dry-run of the script without creating any cluster | False |
+| --skip-health-check | Do not run Health Checks after cluster is installed by osde2e | False |
 
 ## Account Configuration File
 

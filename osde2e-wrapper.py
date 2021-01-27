@@ -167,10 +167,9 @@ def _download_kubeconfig(osde2ectl_cmd,my_path):
         logging.error(stdout)
         logging.error(stderr)
 
-def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,timestamp,dry_run,index_retry):
+def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,timestamp,dry_run,index_retry,skip_health_check):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
-
     # osde2e takes a relative path to the account file so we need to create it in a working dir and
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + str(my_inc)
@@ -188,7 +187,9 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
     logging.debug('Attempting cluster installation')
     logging.debug('Output directory set to %s' % cluster_path)
     cluster_cmd = [osde2e_cmnd, "test","--custom-config", "cluster_account.yaml"]
+    cluster_cmd.append('--skip-health-check') if skip_health_check else None
     if not dry_run:
+        logging.debug(cluster_cmd)
         process = subprocess.Popen(cluster_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=cluster_env, cwd=cluster_path)
         logging.info('Started cluster %d' % my_inc)
         stdout,stderr = process.communicate()
@@ -231,7 +232,6 @@ def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay,my_uuid):
     my_config = yaml.load(open(my_path + "/account_config.yaml"))
     my_thread = threading.currentThread()
     cmd = [osde2ectl_cmd, "list", "--custom-config", "account_config.yaml"]
-
     # To stop the watcher we expect the run attribute to be not True
     while getattr(my_thread, "run", True):
         logging.debug(cmd)
@@ -385,6 +385,12 @@ def main():
         dest='dry_run',
         action='store_true',
         help='Perform a dry-run of the script without creating any cluster')
+    parser.add_argument(
+        '--skip-health-check',
+        dest='skip_health_check',
+        action='store_true',
+        help='Do not execute health checks after cluster installation'
+    )
     args = parser.parse_args()
 
     if args.es_url is not None:
@@ -561,7 +567,7 @@ def main():
                 logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
                 try:
                     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,timestamp,args.dry_run,args.es_index_retry))
+                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,timestamp,args.dry_run,args.es_index_retry,args.skip_health_check))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
