@@ -179,7 +179,7 @@ def _download_kubeconfig(osde2ectl_cmd,my_path):
         logging.error(stdout)
         logging.error(stderr)
 
-def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,cluster_count,timestamp,dry_run,index_retry,skip_health_check):
+def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,cluster_count,timestamp,dry_run,index_retry,skip_health_check,must_gather):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
     # osde2e takes a relative path to the account file so we need to create it in a working dir and
@@ -200,15 +200,16 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
     logging.debug('Output directory set to %s' % cluster_path)
     cluster_cmd = [osde2e_cmnd, "test","--custom-config", "cluster_account.yaml"]
     cluster_cmd.append('--skip-health-check') if skip_health_check else None
+    cluster_cmd.append('--must-gather=false') if not must_gather else None
     if not dry_run:
         logging.debug(cluster_cmd)
-        process = subprocess.Popen(cluster_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=cluster_env, cwd=cluster_path)
+        installation_log = open(cluster_path + "/" + 'installation.log', 'w')
+        process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log, env=cluster_env, cwd=cluster_path)
         logging.info('Started cluster %s (%d of %d)' % (account_config['cluster']['name'],my_inc,cluster_count))
         stdout,stderr = process.communicate()
         cluster_end_time = time.strftime("%Y-%m-%dT%H:%M:%S")
         if process.returncode != 0:
             logging.error('Failed to build cluster %d: %s' % (my_inc,account_config['cluster']['name']))
-            logging.error(stderr.strip().decode("utf-8"))
             success = False
         logging.info('Attempting to load metadata json')
         try:
@@ -406,8 +407,12 @@ def main():
         '--skip-health-check',
         dest='skip_health_check',
         action='store_true',
-        help='Do not execute health checks after cluster installation'
-    )
+        help='Do not execute health checks after cluster installation')
+    parser.add_argument(
+        '--osde2e-must-gather',
+        dest='osde2e_must_gather',
+        help='Add a must-gather operation at the end of the osde2e test process',
+        action='store_true')
     args = parser.parse_args()
 
     if not args.es_index_only and not args.account_config:
@@ -596,7 +601,7 @@ def main():
                 logging.debug('Starting Cluster thread %d for cluster %s' % (loop_counter + 1,my_cluster_config['cluster']['name']))
                 try:
                     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,args.cluster_count,timestamp,args.dry_run,args.es_index_retry,args.skip_health_check))
+                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,args.cluster_count,timestamp,args.dry_run,args.es_index_retry,args.skip_health_check,args.osde2e_must_gather))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
