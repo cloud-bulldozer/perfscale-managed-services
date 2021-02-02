@@ -12,10 +12,16 @@ non-errored clusters. Errored clusters are left to allow additional diagnosis.
 After each cluster installation, kubeconfig file for that cluster will be downloaded and located
 on its own folder.
 
-Example invocation:
+Example minimal invocation:
 
 ```
-$ python3 osde2e-wrapper.py --path /tmp/foo -s my.es.server.com -p 80 --account-config /home/foo/my_config.yaml --cluster-count 2 --batch-size 2 --aws-account-file /home/foo/aws_creds --user-override myfoo
+$ python3 osde2e-wrapper.py --account-config /home/foo/my_config.yaml
+```
+
+Example invocation with options:
+
+```
+$ python3 osde2e-wrapper.py --path /tmp/foo --es-url https://my.es.server.com:80 --account-config /home/foo/my_config.yaml --cluster-count 2 --batch-size 2 --aws-account-file /home/foo/aws_creds --user-override myfoo
 ```
 
 ## Required packages
@@ -39,8 +45,7 @@ The wrapper takes the following required variables:
 |--------|-------------|---------|
 | --account-config | The account configuration file to be used as the basis for the run.<br>**NOTE: See the Account Configuration File section for more details** | -- |
 
-
-### Optional Elasticsearch variables:
+### Optional Elasticsearch variables
 
 **NOTE: If elasticsearch server and port are omitted then the cluster test will run as normal
 without uploading any information**
@@ -53,7 +58,7 @@ without uploading any information**
 | --es-index-retry | Number of retries to connect to ES | 5 |
 | --es-index-only | Upload all metadata.json files found under PATH to elasticsearch | -- |
 
-### Optional variables:
+### Optional variables
 
 | Option | Description | Default |
 |--------|-------------|---------|
@@ -68,7 +73,7 @@ without uploading any information**
 | --expire | Minutes until cluster expires and it is deleted by OSD. It sets CLUSTER_EXPIRY_IN_MINUTES var for osde2e | -- |
 | --cleanup-clusters | Cleanup any non-error state clusters upon test completion. | True |
 | --user-override | User to set as the owner. <br>**NOTE: this takes precidence over what is provided in the account-config file** | -- |
-| --aws-account-file | AWS account file that provides account,accessKey,secretKey. This file will be looped over as needed to achieve all clusters requested. Example format: <br> ```0009808111,AAAA53YREVPCS111,00019ILbzo+yWU9C5FG5YrnoZC5eBg2111```<br>```0007006111,AAAAUZRL736SW6111,000P/b94AL+LSCzJBWbZCYRuYArF9Zr111``` | -- |
+| --aws-account-file | AWS account file that provides account,accessKey,secretKey. This file will be looped over as needed to achieve all clusters requested. Example format: <br> ```0009808111,AAAA53YREVPCS111,00019ILbzo+yWU9C5FG5YrnoZC5eBg2111```<br>```0007006111,AAAAUZRL736SW6111,000P/b94AL+LSCzJBWbZCYRuYArF9Zr111```<br>Having AWS_PROFILE variable set will choose which profile to use. | -- |
 | --log-file | File where to write logs. | -- |
 | --log-level | Level of logs to show. | INFO |
 | --dry-run | Perform a dry-run of the script without creating any cluster | False |
@@ -81,7 +86,7 @@ ocm and AWS.
 
 The configuration file requires some information to be provided for a successful cluster creation.
 
-```
+```yaml
 cloudProvider:
   providerId: aws            # The cloud provider (only aws is supported atm)
   region: us-west-2          # The cloud region
@@ -93,7 +98,7 @@ ocm:
 The file supports any additional information you could pass to osde2e via a configuration file. An example
 with some additional information such as the openshift cluster version, a user override and aws credentials.
 
-```
+```yaml
 cloudProvider:
   providerId: aws
   region: us-west-2
@@ -130,7 +135,7 @@ that your maximum open file limit is sufficient for the number of clusters you w
 
 To increase you maximum hard and soft open file limit you can run:
 
-```
+```sh
 ulimit -Hn 99999999
 ulimit -Sn 99999999
 ```
@@ -143,7 +148,7 @@ is also advised. Setting each to 20000 should be more than sufficient for a 1000
 
 These values can be changed by running the following.
 
-```
+```sh
 sysctl user.max_inotify_instances=20000
 sysctl user.max_inotify_watches=20000
 ```
