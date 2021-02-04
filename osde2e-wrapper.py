@@ -76,6 +76,7 @@ def _index_result(es,index,metadata,index_retry):
         my_doc['install_phase_pass_rate'] = key_exists('install-phase-pass-rate',metadata)
         my_doc['upgrade_phase_pass_rate'] = key_exists('upgrade-phase-pass-rate',metadata)
         if 'log-metrics' in metadata:
+            my_doc['log_metrics'] = {}
             my_doc['log_metrics']['access_token_500'] = key_exists('access-token-500',metadata['log-metrics'])
             my_doc['log_metrics']['cluster_mgmt_500'] = key_exists('cluster-mgmt-500',metadata['log-metrics'])
             my_doc['log_metrics']['cluster_pending'] = key_exists('cluster-pending',metadata['log-metrics'])
@@ -352,7 +353,7 @@ def main():
     parser.add_argument(
         '--cluster-name-seed',
         type=str,
-        help='Seed used to generate cluster names.')
+        help='Seed used to generate cluster names. 6 chars max')
     parser.add_argument(
         '--cluster-count',
         default=1,
