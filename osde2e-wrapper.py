@@ -25,6 +25,8 @@ import errno
 import git
 import threading
 import copy
+import string
+import random
 from ruamel.yaml import YAML
 
 def _connect_to_es(es_url, insecure):
@@ -176,12 +178,12 @@ def _download_kubeconfig(osde2ectl_cmd,my_path):
         logging.error(stdout)
         logging.error(stderr)
 
-def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,timestamp,dry_run,index_retry,skip_health_check):
+def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,cluster_count,timestamp,dry_run,index_retry,skip_health_check):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
     # osde2e takes a relative path to the account file so we need to create it in a working dir and
     # pass that dir as the cwd to subproccess
-    cluster_path = my_path + "/" + str(my_inc)
+    cluster_path = my_path + "/" + account_config['cluster']['name']
     os.mkdir(cluster_path)
     yaml = YAML(pure=True)
     yaml.default_flow_style = False
@@ -200,11 +202,11 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
     if not dry_run:
         logging.debug(cluster_cmd)
         process = subprocess.Popen(cluster_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=cluster_env, cwd=cluster_path)
-        logging.info('Started cluster %d' % my_inc)
+        logging.info('Started cluster %s (%d of %d)' % (account_config['cluster']['name'],my_inc,cluster_count))
         stdout,stderr = process.communicate()
         cluster_end_time = time.strftime("%Y-%m-%dT%H:%M:%S")
         if process.returncode != 0:
-            logging.error('Failed to build cluster number %d' % my_inc)
+            logging.error('Failed to build cluster %d: %s' % (my_inc,account_config['cluster']['name']))
             logging.error(stderr.strip().decode("utf-8"))
             success = False
         logging.info('Attempting to load metadata json')
@@ -217,6 +219,7 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
         metadata["cluster_end_time"] = cluster_end_time
         metadata["install_successful"] = success
         metadata["uuid"] = my_uuid
+        metadata['cluster_name'] = account_config['cluster']['name']
         metadata["install_counter"] = my_inc
         try:
             with open(cluster_path + "/metadata.json", "w") as metadata_file:
@@ -347,6 +350,10 @@ def main():
         help='Should we delete the temporary directory',
         default=False)
     parser.add_argument(
+        '--cluster-name-seed',
+        type=str,
+        help='Seed used to generate cluster names.')
+    parser.add_argument(
         '--cluster-count',
         default=1,
         type=int,
@@ -401,8 +408,8 @@ def main():
     )
     args = parser.parse_args()
 
-    if not args.es_index_only and not args.account_config:
-        parser.error('the following arguments are required: --account-config')
+    if not args.es_index_only and (not args.account_config or not args.cluster_name_seed):
+        parser.error('the following arguments are required: --account-config AND --cluster-name-seed')
 
     if args.es_url is not None:
         es = _connect_to_es(args.es_url, args.es_insecure)
@@ -492,6 +499,14 @@ def main():
         logging.error('No ocm token supplied in configuration file: %s' % args.account_config)
         exit(1)
 
+    cluster_name_seed = args.cluster_name_seed
+    allowed_chars = string.ascii_lowercase + string.digits
+    random_string = ''.join(random.choice(allowed_chars) for j in range(3))
+    if len(cluster_name_seed) > 6:
+        logging.warning('Cluster Name Seed too long (%d), truncated to %s' % (len(cluster_name_seed), cluster_name_seed[:6]))
+        cluster_name_seed = cluster_name_seed[:6]
+    cluster_name_seed += "-" + random_string
+
     # Set the user override if provided on the cli or generate a new one
     # if none is set
     if args.user_override is not None:
@@ -575,10 +590,11 @@ def main():
                 create_cluster = True
 
             if create_cluster:
-                logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
+                my_cluster_config['cluster']['name'] = cluster_name_seed + "-" + str(loop_counter).zfill(4)
+                logging.debug('Starting Cluster thread %d for cluster %s' % (loop_counter + 1,my_cluster_config['cluster']['name']))
                 try:
                     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,timestamp,args.dry_run,args.es_index_retry,args.skip_health_check))
+                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,args.cluster_count,timestamp,args.dry_run,args.es_index_retry,args.skip_health_check))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
