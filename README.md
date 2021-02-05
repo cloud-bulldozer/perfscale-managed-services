@@ -44,7 +44,7 @@ The wrapper takes the following required variables:
 | Option | Description | Default |
 |--------|-------------|---------|
 | --account-config | The account configuration file to be used as the basis for the run.<br>**NOTE: See the Account Configuration File section for more details** | -- |
-| --cluster-name-seed | Seed for naming all clusters. No more than 6 chars or it will be truncated | -- |
+| --cluster-name-seed | Seed for naming all clusters. No more than 6 chars or it will be truncated | osde2e |
 
 ### Optional Elasticsearch variables
 
