@@ -48,43 +48,7 @@ def _connect_to_es(es_url, insecure):
     return es
 
 def _index_result(es,index,metadata,index_retry):
-    def key_exists(key,dict):
-        if key in dict:
-            return dict[key]
-        else:
-            return ""
-    try:
-        my_doc = {}
-        my_doc['timestamp'] = key_exists('timestamp',metadata)
-        my_doc['cluster_start_time'] = key_exists('cluster_start_time',metadata)
-        my_doc['cluster_end_time'] = key_exists('cluster_end_time',metadata)
-        my_doc['install_successful'] = key_exists('install_successful',metadata)
-        my_doc['uuid"'] = key_exists('uuid',metadata)
-        my_doc['install_counter'] = key_exists('install_counter',metadata)
-        my_doc['cluster_id'] = key_exists('cluster_id',metadata)
-        my_doc['cluster_name'] = key_exists('cluster_name',metadata)
-        # cluster version: https://issues.redhat.com/browse/SDA-3601
-        my_doc['cluster_version'] = key_exists('cluster-version',metadata)
-        my_doc['environment'] = key_exists('environment',metadata)
-        my_doc['region'] = key_exists('region',metadata)
-        my_doc['details_url'] = key_exists('details_url',metadata)
-        my_doc['time_to_ocm_reporting_installed'] = int(float(key_exists('time-to-ocm-reporting-installed',metadata))) if key_exists('time-to-ocm-reporting-installed',metadata).isnumeric() else ""
-        my_doc['time_to_cluster_ready'] = int(float(key_exists('time-to-cluster-ready',metadata))) if key_exists('time-to-cluster-ready',metadata).isnumeric() else ""
-        my_doc['time_to_upgraded_cluster'] = int(float(key_exists('time-to-upgraded-cluster',metadata))) if key_exists('time-to-upgraded-cluster',metadata).isnumeric() else ""
-        my_doc['time_to_upgraded_cluster_ready'] = int(float(key_exists('time-to-upgraded-cluster-ready',metadata))) if key_exists('time-to-upgraded-cluster-ready',metadata).isnumeric() else ""
-        my_doc['time_to_certificate_issued'] = int(float(key_exists('time-to-certificate-issued',metadata))) if key_exists('time-to-certificate-issued',metadata).isnumeric() else ""
-        my_doc['install_phase_pass_rate'] = key_exists('install-phase-pass-rate',metadata)
-        my_doc['upgrade_phase_pass_rate'] = key_exists('upgrade-phase-pass-rate',metadata)
-        if 'log-metrics' in metadata:
-            my_doc['log_metrics'] = {}
-            my_doc['log_metrics']['access_token_500'] = key_exists('access-token-500',metadata['log-metrics'])
-            my_doc['log_metrics']['cluster_mgmt_500'] = key_exists('cluster-mgmt-500',metadata['log-metrics'])
-            my_doc['log_metrics']['cluster_pending'] = key_exists('cluster-pending',metadata['log-metrics'])
-            my_doc['log_metrics']['eof'] = key_exists('eof',metadata['log-metrics'])
-            my_doc['log_metrics']['host_dns_lookup'] = key_exists('host_dns_lookup',metadata['log-metrics'])
-    except KeyError as e:
-        logging.error('Cannot build document to upload to ES')
-        logging.error(e)
+    my_doc = buildDoc(metadata)
 
     logging.debug('Document to be uploaded to ES:')
     logging.debug(my_doc)
@@ -103,6 +67,46 @@ def _index_result(es,index,metadata,index_retry):
     else:
         logging.error('Reached the maximun number of retries: %d, ES upload failed for %s' % (index_retry, my_doc['cluster_id']))
         return 1
+
+def buildDoc(metadata):
+    def key_exists(key,dict):
+        if key in dict:
+            return dict[key]
+        else:
+            return ""
+    my_doc = {}
+    try:
+        my_doc['timestamp'] = key_exists('timestamp',metadata)
+        my_doc['cluster_start_time'] = key_exists('cluster_start_time',metadata)
+        my_doc['cluster_end_time'] = key_exists('cluster_end_time',metadata)
+        my_doc['install_successful'] = bool(key_exists('install_successful',metadata))
+        my_doc['uuid'] = key_exists('uuid',metadata)
+        my_doc['install_counter'] = key_exists('install_counter',metadata)
+        my_doc['cluster_id'] = key_exists('cluster-id',metadata)
+        my_doc['cluster_name'] = key_exists('cluster-name',metadata)
+        # cluster version: https://issues.redhat.com/browse/SDA-3601
+        my_doc['cluster_version'] = key_exists('cluster-version',metadata)
+        my_doc['environment'] = key_exists('environment',metadata)
+        my_doc['region'] = key_exists('region',metadata)
+        my_doc['details_url'] = key_exists('details-url',metadata)
+        my_doc['time_to_ocm_reporting_installed'] = int(float(key_exists('time-to-ocm-reporting-installed',metadata))) if key_exists('time-to-ocm-reporting-installed',metadata) else ""
+        my_doc['time_to_cluster_ready'] = int(float(key_exists('time-to-cluster-ready',metadata))) if key_exists('time-to-cluster-ready',metadata) else ""
+        my_doc['time_to_upgraded_cluster'] = int(float(key_exists('time-to-upgraded-cluster',metadata))) if key_exists('time-to-upgraded-cluster',metadata) else ""
+        my_doc['time_to_upgraded_cluster_ready'] = int(float(key_exists('time-to-upgraded-cluster-ready',metadata))) if key_exists('time-to-upgraded-cluster-ready',metadata) else ""
+        my_doc['time_to_certificate_issued'] = int(float(key_exists('time-to-certificate-issued',metadata))) if key_exists('time-to-certificate-issued',metadata) else ""
+        my_doc['install_phase_pass_rate'] = key_exists('install-phase-pass-rate',metadata)
+        my_doc['upgrade_phase_pass_rate'] = key_exists('upgrade-phase-pass-rate',metadata)
+        if 'log-metrics' in metadata:
+            my_doc['log_metrics'] = {}
+            my_doc['log_metrics']['access_token_500'] = key_exists('access-token-500',metadata['log-metrics'])
+            my_doc['log_metrics']['cluster_mgmt_500'] = key_exists('cluster-mgmt-500',metadata['log-metrics'])
+            my_doc['log_metrics']['cluster_pending'] = key_exists('cluster-pending',metadata['log-metrics'])
+            my_doc['log_metrics']['eof'] = key_exists('eof',metadata['log-metrics'])
+            my_doc['log_metrics']['host_dns_lookup'] = key_exists('host-dns-lookup',metadata['log-metrics'])
+    except KeyError as e:
+        logging.error('Cannot build document to upload to ES')
+        logging.error(e)
+    return my_doc
 
 def _create_path(my_path):
     try:
