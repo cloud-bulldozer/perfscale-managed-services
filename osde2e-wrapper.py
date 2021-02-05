@@ -352,6 +352,7 @@ def main():
         default=False)
     parser.add_argument(
         '--cluster-name-seed',
+        default='osde2e',
         type=str,
         help='Seed used to generate cluster names. 6 chars max')
     parser.add_argument(
@@ -409,8 +410,8 @@ def main():
     )
     args = parser.parse_args()
 
-    if not args.es_index_only and (not args.account_config or not args.cluster_name_seed):
-        parser.error('the following arguments are required: --account-config AND --cluster-name-seed')
+    if not args.es_index_only and not args.account_config:
+        parser.error('the following arguments are required: --account-config')
 
     if args.es_url is not None:
         es = _connect_to_es(args.es_url, args.es_insecure)
