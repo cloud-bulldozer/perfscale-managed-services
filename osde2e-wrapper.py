@@ -95,7 +95,7 @@ def _index_result(es,index,metadata,index_retry):
             logging.error(e)
             logging.error('Failed to upload to ES, waiting %d seconds for next upload retry' % (5 * (attempt + 1)))
         else:
-            logging.info('ES upload successful for cluster id %s' % my_doc['cluster_id'])
+            logging.debug('ES upload successful for cluster id %s' % my_doc['cluster_id'])
             return 0
     else:
         logging.error('Reached the maximun number of retries: %d, ES upload failed for %s' % (index_retry, my_doc['cluster_id']))
