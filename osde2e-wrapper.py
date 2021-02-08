@@ -128,7 +128,7 @@ def _verify_cmnd(osde2e_cmnd,my_path):
         logging.info('Cloning osde2e git repository')
         try:
             git.Repo.clone_from("https://github.com/openshift/osde2e.git", osde2e_path, kill_after_timeout=300)
-        except git.exc.GitCommandError as err:
+        except git.GitCommandError as err:
             logging.error(err)
             exit(1)
 
