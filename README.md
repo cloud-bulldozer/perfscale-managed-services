@@ -79,8 +79,8 @@ without uploading any information**
 | --log-level | Level of logs to show. | INFO |
 | --dry-run | Perform a dry-run of the script without creating any cluster | False |
 | --skip-health-check | Do not run Health Checks after cluster is installed by osde2e | False |
-|--osde2e-must-gather | Enable gathering facts after cluster installation | False
-
+| --osde2e-must-gather | Enable gathering facts after cluster installation | False |
+| --ignored-metadata | List of keys to ignore from the metadata file | ```before-suite-metrics route-latencies route-throughputs route-availabilities healthchecks healthcheckIteration status```
 
 ## Account Configuration File
 

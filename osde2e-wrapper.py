@@ -29,7 +29,7 @@ import string
 import random
 from ruamel.yaml import YAML
 
-_ignoredMetadata = []
+_ignoredMetadata = ['before-suite-metrics','route-latencies','route-throughputs','route-availabilities','healthchecks','healthcheckIteration','status']
 
 def _connect_to_es(es_url, insecure):
     if es_url.startswith('https://'):
@@ -419,6 +419,12 @@ def main():
         dest='osde2e_must_gather',
         help='Add a must-gather operation at the end of the osde2e test process',
         action='store_true')
+    parser.add_argument(
+        '--ignored-metadata',
+        dest='ignoredMetadata',
+        default=_ignoredMetadata,
+        nargs='+',
+        help='List of keys to ignore from the metadata file.')
     args = parser.parse_args()
 
     if not args.es_index_only and not args.account_config:
@@ -607,7 +613,7 @@ def main():
                 logging.debug('Starting Cluster thread %d for cluster %s' % (loop_counter + 1,my_cluster_config['cluster']['name']))
                 try:
                     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,args.cluster_count,timestamp,args.dry_run,args.es_index_retry,args.skip_health_check,args.osde2e_must_gather))
+                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,args.cluster_count,timestamp,args.dry_run,args.es_index_retry,args.skip_health_check,args.osde2e_must_gather,args.ignoredMetadata))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
