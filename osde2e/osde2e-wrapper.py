@@ -77,23 +77,26 @@ def _download_kubeconfig(osde2ectl_cmd,my_path):
     logging.info('Attempting to load metadata json')
     try:
         metadata = json.load(open(my_path + "/metadata.json"))
-        cluster_id = metadata['cluster-id']
     except Exception as err:
         logging.error(err)
         logging.error('Failed to load metadata.json file located %s, kubeconfig file wont be downloaded' % my_path)
         return 0
-
-    # required to create a new folder on kubeconfig_path until https://github.com/openshift/osde2e/issues/657 will be fixed
-    kubeconfig_path = my_path + "/" + cluster_id
-    logging.info('Downloading kubeconfig file for cluster %s on %s' % (cluster_id,kubeconfig_path))
-    cmd = [osde2ectl_cmd, "--custom-config", "cluster_account.yaml", "get", "-k", "-i", cluster_id, "--kube-config-path", kubeconfig_path]
-    logging.debug(cmd)
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
-    stdout,stderr = process.communicate()
-    if process.returncode != 0:
-        logging.error('Failed to download kubeconfig file for cluster id %s with this stdout/stderr:' % cluster_id)
-        logging.error(stdout)
-        logging.error(stderr)
+    if 'cluster_id' in metadata and metadata['cluster-id'] != "":
+        cluster_id = metadata['cluster-id']
+        # required to create a new folder on kubeconfig_path until https://github.com/openshift/osde2e/issues/657 will be fixed
+        kubeconfig_path = my_path + "/" + cluster_id
+        logging.info('Downloading kubeconfig file for cluster %s on %s' % (cluster_id,kubeconfig_path))
+        cmd = [osde2ectl_cmd, "--custom-config", "cluster_account.yaml", "get", "-k", "-i", cluster_id, "--kube-config-path", kubeconfig_path]
+        logging.debug(cmd)
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
+        stdout,stderr = process.communicate()
+        if process.returncode != 0:
+            logging.error('Failed to download kubeconfig file for cluster id %s with this stdout/stderr:' % cluster_id)
+            logging.error(stdout)
+            logging.error(stderr)
+    else:
+        logging.error('Failed to load cluster-id from metadata.json file located on %s, kubeconfig file wont be downloaded' % my_path)
+        return 0
 
 def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,cluster_count,timestamp,dry_run,index_retry,skip_health_check,must_gather,es_ignored_metadata):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -126,6 +129,7 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
         cluster_end_time = time.strftime("%Y-%m-%dT%H:%M:%S")
         if process.returncode != 0:
             logging.error('Failed to build cluster %d: %s' % (my_inc,account_config['cluster']['name']))
+            logging.error('Check installation.log and test_output.log files on %s for errors' % (cluster_path + "/"))
             success = False
         logging.info('Attempting to load metadata json')
         try:
