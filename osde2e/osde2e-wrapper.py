@@ -12,7 +12,6 @@
 #   limitations under the License.
 
 import argparse
-import elasticsearch
 import time
 import subprocess
 import sys
@@ -21,103 +20,16 @@ import os
 import uuid
 import json
 import logging
-import errno
 import git
 import threading
 import copy
 import string
 import random
+from libs import common
 from ruamel.yaml import YAML
 
 _es_ignored_metadata = ['before-suite-metrics','route-latencies','route-throughputs','route-availabilities','healthchecks','healthcheckIteration','status']
 
-def _connect_to_es(es_url, insecure):
-    if es_url.startswith('https://'):
-        import urllib3
-        import ssl
-        ssl_ctx = ssl.create_default_context()
-        if insecure:
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            ssl_ctx.check_hostname = False
-            ssl_ctx.verify_mode = ssl.CERT_NONE
-        es = elasticsearch.Elasticsearch([es_url], send_get_body_as='POST',
-                                         ssl_context=ssl_ctx, use_ssl=True)
-    elif es_url.startswith('http://'):
-        es = elasticsearch.Elasticsearch([es_url], send_get_body_as='POST')
-    else:
-        logging.error('Invalid ES URL: %s' % es_url)
-        exit(1)
-    return es
-
-def _index_result(es,index,metadata,ignoreMetadata,index_retry):
-    my_doc = _buildDoc(metadata, ignoreMetadata)
-
-    logging.debug('Document to be uploaded to ES:')
-    logging.debug(my_doc)
-
-    for attempt in range(index_retry + 1):
-        try:
-            time.sleep(5 * attempt)
-            logging.info('Attempting to upload (Attempt: %d) information to ES server with index %s' % (attempt, index))
-            es.index(index=index, body=my_doc)
-        except Exception as e:
-            logging.error(e)
-            logging.error('Failed to upload to ES, waiting %d seconds for next upload retry' % (5 * (attempt + 1)))
-        else:
-            logging.debug('ES upload successful for cluster id %s' % my_doc['cluster_id'])
-            return 0
-    else:
-        logging.error('Reached the maximun number of retries: %d, ES upload failed for %s' % (index_retry, my_doc['cluster_id']))
-        return 1
-
-def _buildDoc(metadata, ignoreMetadata):
-
-    my_doc = {}
-    my_doc = _getValue(metadata, ignoreMetadata)
-    return my_doc
-
-def _getValue(value, ignoreMetadata):
-    # Parse booleans
-    if isinstance(value, bool):
-        return bool(value)
-
-    # Parse int
-    try:
-        return int(value)
-    except Exception as e:
-        logging.debug('value {} is not an int {}'.format(value, e))
-
-    # Parse floats
-    # By default it was being truncated to int
-    try:
-        return int(float(value))
-    except Exception as e:
-        logging.debug('value {} is not an int {}'.format(value, e))
-
-    # Parse strings
-    if isinstance(value, str):
-        return str(value)
-
-    # Parse a dictionary
-    elif isinstance(value, dict):
-        dictionary = {}
-        for key in value:
-            if key not in ignoreMetadata:
-                val = value[key]
-                key = key.replace('-', '_').replace(' ', '_').lower()
-                v = _getValue(val, ignoreMetadata)
-                dictionary[key] = v
-        return dictionary
-    return
-
-def _create_path(my_path):
-    try:
-        logging.info('Create directory %s if it does not exist' % my_path)
-        os.makedirs(my_path, exist_ok=True)
-    except OSError as e:
-        if e.errno != errno.EEXIST:
-            logging.error(e)
-            exit(1)
 
 # If osde2e command path is provided verify we can run the help function
 # If it is not provided git clone the osde2e repo, build it and validate as above
@@ -238,7 +150,7 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
         _download_kubeconfig(osde2ectl_cmd, cluster_path)
         if es is not None:
             metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-            _index_result(es,index,metadata, ignoreMetadata,index_retry)
+            common._index_result(es,index,metadata,ignoreMetadata,index_retry)
 
 def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay,my_uuid):
     logging.info('Watcher thread started')
@@ -365,8 +277,8 @@ def main():
         default=False)
     parser.add_argument(
         '--cluster-name-seed',
-        default='osde2e',
         type=str,
+        default='osde2e',
         help='Seed used to generate cluster names. 6 chars max')
     parser.add_argument(
         '--cluster-count',
@@ -431,7 +343,7 @@ def main():
         parser.error('the following arguments are required: --account-config')
 
     if args.es_url is not None:
-        es = _connect_to_es(args.es_url, args.es_insecure)
+        es = common._connect_to_es(args.es_url, args.es_insecure)
     else:
         es = None
 
@@ -444,7 +356,7 @@ def main():
     logger.addHandler(consolelog)
     if args.log_file is not None:
         logging.info('Logging to file: %s' % args.log_file)
-        _create_path(os.path.dirname(args.log_file))
+        common._create_path(os.path.dirname(args.log_file))
         logfile = logging.FileHandler(args.log_file)
         logfile.setFormatter(log_format)
         logger.addHandler(logfile)
@@ -467,7 +379,7 @@ def main():
                 except Exception as err:
                     logging.error(err)
                     logging.error('Failed to load metadata.json file located %s' % metadata_file)
-                index_result += _index_result(es,args.es_index,metadata,args.es_ignored_metadata,args.es_index_retry)
+                index_result += common._index_result(es,args.es_index,metadata,args.es_ignored_metadata,args.es_index_retry)
         else:
             logging.error('PATH and elastic related parameters required when uploading data to elastic')
             exit(1)
@@ -483,7 +395,7 @@ def main():
     if my_path is None:
         my_path = '/tmp/' + my_uuid
     logging.info('Using %s as working directory' % (my_path))
-    _create_path(my_path)
+    common._create_path(my_path)
 
     if os.path.exists(args.account_config):
         logging.debug('Account configuration file exists')
