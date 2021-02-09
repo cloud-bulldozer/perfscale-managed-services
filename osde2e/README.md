@@ -82,6 +82,7 @@ without uploading any information**
 | --dry-run | Perform a dry-run of the script without creating any cluster | False |
 | --skip-health-check | Do not run Health Checks after cluster is installed by osde2e | False |
 | --osde2e-must-gather | Enable gathering facts after cluster installation | False |
+| --only-delete-clusters | Delete clusters found on folder specified by **--path**.<br>**NOTE: It will fail if no cluster_name_seed file is found on folder | False |
 
 ## Account Configuration File
 

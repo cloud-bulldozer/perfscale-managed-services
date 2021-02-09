@@ -48,7 +48,7 @@ def _verify_cmnd(rosa_cmnd,my_path):
         url = 'https://github.com/openshift/rosa/releases/download/' + tags_list[-1].split('/')[-1] + '/rosa-linux-amd64'
         with urllib.request.urlopen(url) as response, open(my_path + '/rosa', 'wb') as out_file:
             shutil.copyfileobj(response, out_file)
-        os.chmod(my_path + '/rosa', 0o544)
+        os.chmod(my_path + '/rosa', 0o777)
         rosa_cmnd = my_path + "/rosa"
     logging.info('Testing rosa command with: rosa -h')
     rosa_cmd = [rosa_cmnd, "-h"]
@@ -110,7 +110,7 @@ def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,in
     success = True
     metadata = {}
     # pass that dir as the cwd to subproccess
-    cluster_path = my_path + "/" + str(my_inc).zfill(4)
+    cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
     os.mkdir(cluster_path)
     logging.debug('Attempting cluster installation')
     logging.debug('Output directory set to %s' % cluster_path)
@@ -175,7 +175,7 @@ def _watcher(rosa_cmnd,cluster_name_seed,cluster_count,delay,my_uuid):
     logging.info('Getting status every %d seconds' % int(delay))
     my_thread = threading.currentThread()
     # We need to determine somewhere the number of clusters to show
-    cmd = [rosa_cmnd, "list", "clusters", "--count", "9999"]
+    cmd = [rosa_cmnd, "list", "clusters"]
     # To stop the watcher we expect the run attribute to be not True
     while getattr(my_thread, "run", True):
         logging.debug(cmd)
@@ -206,8 +206,9 @@ def _watcher(rosa_cmnd,cluster_name_seed,cluster_count,delay,my_uuid):
     logging.info('Watcher exiting')
 
 def _cleanup_clusters(rosa_cmnd,cluster_name_seed):
+    exit_status = 0
     logging.info('Starting cluster cleanup for %s' % cluster_name_seed)
-    cmd = [rosa_cmnd, "list", "clusters", "--count", "9999"]
+    cmd = [rosa_cmnd, "list", "clusters"]
     logging.debug(cmd)
     all_clusters = subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
     stdout,stderr = all_clusters.communicate()
@@ -226,10 +227,12 @@ def _cleanup_clusters(rosa_cmnd,cluster_name_seed):
                     logging.error('Cluster cleanup failed for cluster id %s with this stdout/stderr:' % cluster_id)
                     logging.error(stdout)
                     logging.error(stderr)
+                    exit_status = 1
             else:
                 error.append(cluster_id)
     logging.info('Clusters in error state. Not deleting:')
     logging.info(error)
+    return exit_status
 
 def main():
     parser = argparse.ArgumentParser(description="osde2e wrapper script",
@@ -272,8 +275,11 @@ def main():
         help='AWS profile to use if more than one are present on aws config file')
     args = parser.parse_args()
 
-    if not args.es_index_only and (not args.rosa_token or not args.cluster_name_seed):
-        parser.error('the following arguments are required: --rosa-token AND --cluster-name-seed')
+    if not args.es_index_only and not args.rosa_token:
+        parser.error("argument '--rosa-token' is required (except when using '--es-index-only')")
+
+    if args.only_delete_clusters and not args.path:
+        parser.error("argument '--path' is required when using '--only-delete-clusters'")
 
     _es_ignored_metadata = []
     if args.es_url is not None:
@@ -321,6 +327,20 @@ def main():
             exit(1)
         exit(index_result)
 
+    if args.only_delete_clusters:
+        try:
+            logging.info('Reading cluster name seed from %s' % args.path)
+            cluster_name_seed_file = open(args.path + '/cluster_name_seed')
+            cluster_name_seed = cluster_name_seed_file.read().replace("\n","")
+            logging.info('Found cluster name seed as: %s' % cluster_name_seed)
+        except Exception as err:
+            logging.error(err)
+            logging.error('Failed to read %s/cluster_name_seed file' % args.path)
+            exit(1)
+        rosa_cmnd = _verify_cmnd(args.rosa_cli,args.path)
+        cleanup_result = _cleanup_clusters(rosa_cmnd,cluster_name_seed)
+        exit(cleanup_result)
+
     # global uuid to assign for the group of clusters created. each cluster will have its own cluster-id
     my_uuid = args.uuid
     if my_uuid is None:
@@ -345,13 +365,20 @@ def main():
 
     cluster_name_seed = common._generate_cluster_name_seed(args.cluster_name_seed)
 
+    try:
+        logging.debug('Saving cluster name seed %s to the working directory' % cluster_name_seed)
+        seed_file = open(my_path + '/cluster_name_seed','x')
+        seed_file.write(cluster_name_seed)
+        seed_file.close()
+    except Exception as err:
+        logging.debug('Cannot write file %s/cluster_name_seed' % my_path)
+        logging.error(err)
+        exit(1)
+
     rosa_cmnd = _verify_cmnd(args.rosa_cli,my_path)
 
     logging.info('Attempting to log in OCM using `rosa login`')
     rosa_login_command = [rosa_cmnd, "login", "--token=" + args.rosa_token]
-    if args.aws_profile:
-        rosa_login_command.append('--profile')
-        rosa_login_command.append(args.aws_profile)
     if args.rosa_env:
         rosa_login_command.append('--env=' + args.rosa_env)
     logging.debug(rosa_login_command)
