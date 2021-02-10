@@ -29,7 +29,7 @@ import string
 import random
 from ruamel.yaml import YAML
 
-_ignoredMetadata = ['before-suite-metrics','route-latencies','route-throughputs','route-availabilities','healthchecks','healthcheckIteration','status']
+_es_ignored_metadata = ['before-suite-metrics','route-latencies','route-throughputs','route-availabilities','healthchecks','healthcheckIteration','status']
 
 def _connect_to_es(es_url, insecure):
     if es_url.startswith('https://'):
@@ -345,6 +345,12 @@ def main():
         action='store_true',
         help='Do not install any new cluster, just upload to ES all metadata files found on PATH')
     parser.add_argument(
+        '--es-ignored-metadata',
+        dest='es_ignored_metadata',
+        default=_es_ignored_metadata,
+        nargs='+',
+        help='List of keys to ignore from the metadata file.')
+    parser.add_argument(
         '--uuid',
         help='UUID to provide to ES')
     parser.add_argument(
@@ -419,12 +425,6 @@ def main():
         dest='osde2e_must_gather',
         help='Add a must-gather operation at the end of the osde2e test process',
         action='store_true')
-    parser.add_argument(
-        '--ignored-metadata',
-        dest='ignoredMetadata',
-        default=_ignoredMetadata,
-        nargs='+',
-        help='List of keys to ignore from the metadata file.')
     args = parser.parse_args()
 
     if not args.es_index_only and not args.account_config:
@@ -467,7 +467,7 @@ def main():
                 except Exception as err:
                     logging.error(err)
                     logging.error('Failed to load metadata.json file located %s' % metadata_file)
-                index_result += _index_result(es,args.es_index,metadata,_ignoredMetadata,args.es_index_retry)
+                index_result += _index_result(es,args.es_index,metadata,args.es_ignored_metadata,args.es_index_retry)
         else:
             logging.error('PATH and elastic related parameters required when uploading data to elastic')
             exit(1)
@@ -613,7 +613,7 @@ def main():
                 logging.debug('Starting Cluster thread %d for cluster %s' % (loop_counter + 1,my_cluster_config['cluster']['name']))
                 try:
                     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,args.cluster_count,timestamp,args.dry_run,args.es_index_retry,args.skip_health_check,args.osde2e_must_gather,args.ignoredMetadata))
+                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,args.cluster_count,timestamp,args.dry_run,args.es_index_retry,args.skip_health_check,args.osde2e_must_gather,args.es_ignored_metadata))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
