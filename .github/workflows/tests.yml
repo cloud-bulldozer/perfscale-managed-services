@@ -25,3 +25,6 @@ jobs:
     - name: Tox
       run: |
         tox .
+    - name: Unit tests
+      run: |
+        python -m unittest test_osde2e-wrapper.py

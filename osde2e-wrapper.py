@@ -29,6 +29,8 @@ import string
 import random
 from ruamel.yaml import YAML
 
+_es_ignored_metadata = ['before-suite-metrics','route-latencies','route-throughputs','route-availabilities','healthchecks','healthcheckIteration','status']
+
 def _connect_to_es(es_url, insecure):
     if es_url.startswith('https://'):
         import urllib3
@@ -47,44 +49,8 @@ def _connect_to_es(es_url, insecure):
         exit(1)
     return es
 
-def _index_result(es,index,metadata,index_retry):
-    def key_exists(key,dict):
-        if key in dict:
-            return dict[key]
-        else:
-            return ""
-    try:
-        my_doc = {}
-        my_doc['timestamp'] = key_exists('timestamp',metadata)
-        my_doc['cluster_start_time'] = key_exists('cluster_start_time',metadata)
-        my_doc['cluster_end_time'] = key_exists('cluster_end_time',metadata)
-        my_doc['install_successful'] = key_exists('install_successful',metadata)
-        my_doc['uuid"'] = key_exists('uuid',metadata)
-        my_doc['install_counter'] = key_exists('install_counter',metadata)
-        my_doc['cluster_id'] = key_exists('cluster_id',metadata)
-        my_doc['cluster_name'] = key_exists('cluster_name',metadata)
-        # cluster version: https://issues.redhat.com/browse/SDA-3601
-        my_doc['cluster_version'] = key_exists('cluster-version',metadata)
-        my_doc['environment'] = key_exists('environment',metadata)
-        my_doc['region'] = key_exists('region',metadata)
-        my_doc['details_url'] = key_exists('details_url',metadata)
-        my_doc['time_to_ocm_reporting_installed'] = int(float(key_exists('time-to-ocm-reporting-installed',metadata))) if key_exists('time-to-ocm-reporting-installed',metadata).isnumeric() else ""
-        my_doc['time_to_cluster_ready'] = int(float(key_exists('time-to-cluster-ready',metadata))) if key_exists('time-to-cluster-ready',metadata).isnumeric() else ""
-        my_doc['time_to_upgraded_cluster'] = int(float(key_exists('time-to-upgraded-cluster',metadata))) if key_exists('time-to-upgraded-cluster',metadata).isnumeric() else ""
-        my_doc['time_to_upgraded_cluster_ready'] = int(float(key_exists('time-to-upgraded-cluster-ready',metadata))) if key_exists('time-to-upgraded-cluster-ready',metadata).isnumeric() else ""
-        my_doc['time_to_certificate_issued'] = int(float(key_exists('time-to-certificate-issued',metadata))) if key_exists('time-to-certificate-issued',metadata).isnumeric() else ""
-        my_doc['install_phase_pass_rate'] = key_exists('install-phase-pass-rate',metadata)
-        my_doc['upgrade_phase_pass_rate'] = key_exists('upgrade-phase-pass-rate',metadata)
-        if 'log-metrics' in metadata:
-            my_doc['log_metrics'] = {}
-            my_doc['log_metrics']['access_token_500'] = key_exists('access-token-500',metadata['log-metrics'])
-            my_doc['log_metrics']['cluster_mgmt_500'] = key_exists('cluster-mgmt-500',metadata['log-metrics'])
-            my_doc['log_metrics']['cluster_pending'] = key_exists('cluster-pending',metadata['log-metrics'])
-            my_doc['log_metrics']['eof'] = key_exists('eof',metadata['log-metrics'])
-            my_doc['log_metrics']['host_dns_lookup'] = key_exists('host_dns_lookup',metadata['log-metrics'])
-    except KeyError as e:
-        logging.error('Cannot build document to upload to ES')
-        logging.error(e)
+def _index_result(es,index,metadata,ignoreMetadata,index_retry):
+    my_doc = _buildDoc(metadata, ignoreMetadata)
 
     logging.debug('Document to be uploaded to ES:')
     logging.debug(my_doc)
@@ -103,6 +69,46 @@ def _index_result(es,index,metadata,index_retry):
     else:
         logging.error('Reached the maximun number of retries: %d, ES upload failed for %s' % (index_retry, my_doc['cluster_id']))
         return 1
+
+def _buildDoc(metadata, ignoreMetadata):
+
+    my_doc = {}
+    my_doc = _getValue(metadata, ignoreMetadata)
+    return my_doc
+
+def _getValue(value, ignoreMetadata):
+    # Parse booleans
+    if isinstance(value, bool):
+        return bool(value)
+
+    # Parse int
+    try:
+        return int(value)
+    except Exception as e:
+        logging.debug('value {} is not an int {}'.format(value, e))
+
+    # Parse floats
+    # By default it was being truncated to int
+    try:
+        return int(float(value))
+    except Exception as e:
+        logging.debug('value {} is not an int {}'.format(value, e))
+
+    # Parse strings
+    if isinstance(value, str):
+        return str(value)
+
+    # Parse a dictionary
+    elif isinstance(value, dict):
+        dictionary = {}
+        for key in value:
+            if key not in ignoreMetadata:
+                val = value[key]
+                key = key.replace('-', '_').replace(' ', '_').lower()
+                v = _getValue(val, ignoreMetadata)
+                dictionary[key] = v
+        return dictionary
+    return
 
 def _create_path(my_path):
     try:
@@ -124,7 +130,7 @@ def _verify_cmnd(osde2e_cmnd,my_path):
         logging.info('Cloning osde2e git repository')
         try:
             git.Repo.clone_from("https://github.com/openshift/osde2e.git", osde2e_path, kill_after_timeout=300)
-        except git.exc.GitCommandError as err:
+        except git.GitCommandError as err:
             logging.error(err)
             exit(1)
 
@@ -179,7 +185,7 @@ def _download_kubeconfig(osde2ectl_cmd,my_path):
         logging.error(stdout)
         logging.error(stderr)
 
-def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,cluster_count,timestamp,dry_run,index_retry,skip_health_check,must_gather):
+def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,cluster_count,timestamp,dry_run,index_retry,skip_health_check,must_gather,ignoreMetadata):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
     # osde2e takes a relative path to the account file so we need to create it in a working dir and
@@ -232,7 +238,7 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
         _download_kubeconfig(osde2ectl_cmd, cluster_path)
         if es is not None:
             metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-            _index_result(es,index,metadata,index_retry)
+            _index_result(es,index,metadata, ignoreMetadata,index_retry)
 
 def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay,my_uuid):
     logging.info('Watcher thread started')
@@ -338,6 +344,12 @@ def main():
         dest='es_index_only',
         action='store_true',
         help='Do not install any new cluster, just upload to ES all metadata files found on PATH')
+    parser.add_argument(
+        '--es-ignored-metadata',
+        dest='es_ignored_metadata',
+        default=_es_ignored_metadata,
+        nargs='+',
+        help='List of keys to ignore from the metadata file.')
     parser.add_argument(
         '--uuid',
         help='UUID to provide to ES')
@@ -455,7 +467,7 @@ def main():
                 except Exception as err:
                     logging.error(err)
                     logging.error('Failed to load metadata.json file located %s' % metadata_file)
-                index_result += _index_result(es,args.es_index,metadata,args.es_index_retry)
+                index_result += _index_result(es,args.es_index,metadata,args.es_ignored_metadata,args.es_index_retry)
         else:
             logging.error('PATH and elastic related parameters required when uploading data to elastic')
             exit(1)
@@ -601,7 +613,7 @@ def main():
                 logging.debug('Starting Cluster thread %d for cluster %s' % (loop_counter + 1,my_cluster_config['cluster']['name']))
                 try:
                     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,args.cluster_count,timestamp,args.dry_run,args.es_index_retry,args.skip_health_check,args.osde2e_must_gather))
+                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,args.cluster_count,timestamp,args.dry_run,args.es_index_retry,args.skip_health_check,args.osde2e_must_gather,args.es_ignored_metadata))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
