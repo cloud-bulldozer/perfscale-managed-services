@@ -132,6 +132,7 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
         cluster_end_time = time.strftime("%Y-%m-%dT%H:%M:%S")
         if process.returncode != 0:
             logging.error('Failed to build cluster %d: %s' % (my_inc,account_config['cluster']['name']))
+            logging.error('Check installation.log and test_output.log files on %s for errors' % (cluster_path + "/"))
             success = False
         logging.info('Attempting to load metadata json')
         try:
