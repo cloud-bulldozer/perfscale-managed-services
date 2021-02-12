@@ -79,7 +79,11 @@ def _download_kubeconfig(osde2ectl_cmd,my_path):
     logging.info('Attempting to load metadata json')
     try:
         metadata = json.load(open(my_path + "/metadata.json"))
-        cluster_id = metadata['cluster-id']
+        if metadata['cluster-id'] != "":
+            cluster_id = metadata['cluster-id']
+        else:
+            logging.error('Failed to load cluster-id from metadata.json file located on %s, kubeconfig file wont be downloaded' % my_path)
+            return 0
     except Exception as err:
         logging.error(err)
         logging.error('Failed to load metadata.json file located %s, kubeconfig file wont be downloaded' % my_path)
