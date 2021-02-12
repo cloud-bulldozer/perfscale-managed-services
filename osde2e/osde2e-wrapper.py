@@ -155,7 +155,7 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
             metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
             common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
 
-def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay,my_uuid):
+def _watcher(osde2ectl_cmd,cluster_name_seed,account_config,my_path,cluster_count,delay,my_uuid):
     logging.info('Watcher thread started')
     logging.info('Getting status every %d seconds' % int(delay))
     yaml = YAML(pure=True)
@@ -164,7 +164,6 @@ def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay,my_uuid):
     yaml.explicit_end = False
     yaml.allow_duplicate_keys = True
     yaml.dump(account_config,open(my_path + "/account_config.yaml",'w'))
-    my_config = yaml.load(open(my_path + "/account_config.yaml"))
     my_thread = threading.currentThread()
     cmd = [osde2ectl_cmd, "list", "--custom-config", "account_config.yaml"]
     # To stop the watcher we expect the run attribute to be not True
@@ -179,7 +178,7 @@ def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay,my_uuid):
         error = []
         # Count the various states/status' and report it to logging
         for line in stdout.splitlines():
-            if my_config['ocm']['userOverride'] in line:
+            if cluster_name_seed in line:
                 cluster_count += 1
                 state_key = line.split()[2]
                 status_key = line.split()[3]
@@ -208,14 +207,14 @@ def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay,my_uuid):
         time.sleep(delay)
     logging.info('Watcher exiting')
 
-def _cleanup_clusters(osde2ectl_cmd,my_path,account_config):
+def _cleanup_clusters(osde2ectl_cmd,cluster_name_seed,my_path,account_config):
     logging.info('Starting cluster cleanup')
     cmd = [osde2ectl_cmd, "list", "--custom-config", "account_config.yaml"]
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
     stdout,stderr = process.communicate()
     error = []
     for line in stdout.splitlines():
-        if account_config['ocm']['userOverride'] in line:
+        if cluster_name_seed in line:
             state = line.split()[2]
             cluster_id = line.split()[1]
             if state != "error" and state != "uninstalling":
@@ -388,7 +387,7 @@ def main():
     # launch watcher thread to report status
     if not args.dry_run:
         logging.info('Launching watcher thread')
-        watcher = threading.Thread(target=_watcher,args=(cmnd_path + "/osde2ectl",account_config,my_path,args.cluster_count,args.watcher_delay,my_uuid))
+        watcher = threading.Thread(target=_watcher,args=(cmnd_path + "/osde2ectl",cluster_name_seed,account_config,my_path,args.cluster_count,args.watcher_delay,my_uuid))
         watcher.daemon = True
         watcher.start()
         logging.info('Attempting to start %d clusters with %d batch size' % (args.cluster_count,args.batch_size))
@@ -487,7 +486,7 @@ def main():
         watcher.join()
 
     if args.cleanup_clusters is True and not args.dry_run:
-        _cleanup_clusters(cmnd_path + "/osde2ectl",my_path,account_config)
+        _cleanup_clusters(cmnd_path + "/osde2ectl",cluster_name_seed,my_path,account_config)
 
     if args.cleanup is True:
         shutil.rmtree(my_path)
