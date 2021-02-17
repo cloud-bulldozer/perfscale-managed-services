@@ -107,7 +107,7 @@ def _install_addons(rosa_cmnd,cluster_id,addons):
             logging.error(addon_stderr.strip().decode("utf-8"))
         # TODO: control addon is installed with: rosa list addons -c <<cluster_name>>
 
-def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,index,my_uuid,my_inc,timestamp,index_retry,addons,es_ignored_metadata):
+def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,index,my_uuid,my_inc,timestamp,index_retry,addons,es_ignored_metadata,rosa_flavour):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
     metadata = {}
@@ -121,6 +121,8 @@ def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,in
     cluster_cmd = [rosa_cmnd, "create","cluster", "--cluster-name", cluster_name, "-y", "--watch"]
     if rosa_azs:
         cluster_cmd.append('--multi-az')
+    if rosa_flavour:
+        cluster_cmd.append('--flavour=' + rosa_flavour)
     logging.debug(cluster_cmd)
     installation_log = open(cluster_path + "/" + 'installation.log', 'w')
     process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log)
@@ -261,8 +263,11 @@ def main():
     parser.add_argument(
         '--rosa-addons',
         type=str,
-        help='Comma separated list of addons to add to each cluster after installation is completed'
-    )
+        help='Comma separated list of addons to add to each cluster after installation is completed')
+    parser.add_argument(
+        '--rosa-flavour',
+        type=str,
+        help='AWS Flavor to use for infra nodes')
     parser.add_argument(
         '--aws-profile',
         type=str,
@@ -423,7 +428,7 @@ def main():
                 logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
                 try:
                     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    thread = threading.Thread(target=_build_cluster,args=(rosa_cmnd,cluster_name_seed,args.expire,args.rosa_azs,my_path,es,args.es_index,my_uuid,loop_counter,timestamp,args.es_index_retry,args.rosa_addons,_es_ignored_metadata))
+                    thread = threading.Thread(target=_build_cluster,args=(rosa_cmnd,cluster_name_seed,args.expire,args.rosa_azs,my_path,es,args.es_index,my_uuid,loop_counter,timestamp,args.es_index_retry,args.rosa_addons,_es_ignored_metadata,args.rosa_flavour))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
