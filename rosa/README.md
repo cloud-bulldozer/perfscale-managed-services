@@ -62,6 +62,7 @@ without uploading any information**
 | --rosa-env | Rosa environment where to install clusters. | -- |
 | --rosa-multi-az | Install ROSA clusters with multi-az support, deploying on multiple datacenters | False |
 | --rosa-addons | Comma separated list of addons to be added after cluster installation | -- |
+| --rosa-flavour | AWS Flavour to be use on the infra nodes | -- |
 | --aws-profile | AWS profile to use if there is more than one on AWS cli configuration file | -- |
 | --cluster-count | Total number of clusters to create. | 1 |
 | --batch-size | Number of clusters to create in a batch. If not set it will try and create them all at once. <br>**NOTE**: If not used in conjunction with --delay-between-batch the cluster creation will block at the set batch size until one completes then continue. I.e. if 3 clusters are requested with a batch size of 2. The first two will be requested and then it will block until one of those completes to request the third. | -- |
