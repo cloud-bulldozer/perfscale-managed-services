@@ -11,4 +11,4 @@ Managed OCP4 installed on AWS
 
 ### Available Testers
 - [osde2e-wrapper](./osde2e/README.md)
-- [rosa-wrapper](./rosa/README.md)
+- [rosa-wrapper](./rosa/README.md )
