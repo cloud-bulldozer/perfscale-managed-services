@@ -337,6 +337,11 @@ def main():
         action='store_true',
         help='Do not execute health checks after cluster installation')
     parser.add_argument(
+        '--osde2e-multi-az',
+        dest='osde2e_multi_az',
+        help='Deploy cluster using AWS AZs availables',
+        action='store_true')
+    parser.add_argument(
         '--osde2e-must-gather',
         dest='osde2e_must_gather',
         help='Add a must-gather operation at the end of the osde2e test process',
@@ -526,6 +531,7 @@ def main():
 
             if create_cluster:
                 my_cluster_config['cluster']['name'] = cluster_name_seed + "-" + str(loop_counter).zfill(4)
+                my_cluster_config['cluster']['multiAZ'] = args.osde2e_multi_az
                 logging.debug('Starting Cluster thread %d for cluster %s' % (loop_counter + 1,my_cluster_config['cluster']['name']))
                 try:
                     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
