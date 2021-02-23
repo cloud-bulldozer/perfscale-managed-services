@@ -26,9 +26,8 @@ import copy
 import string
 import random
 from libs import common
+from libs import parentParser
 from ruamel.yaml import YAML
-
-_es_ignored_metadata = ['before-suite-metrics','route-latencies','route-throughputs','route-availabilities','healthchecks','healthcheckIteration','status']
 
 
 # If osde2e command path is provided verify we can run the help function
@@ -97,7 +96,7 @@ def _download_kubeconfig(osde2ectl_cmd,my_path):
         logging.error(stdout)
         logging.error(stderr)
 
-def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,cluster_count,timestamp,dry_run,index_retry,skip_health_check,must_gather,ignoreMetadata):
+def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,cluster_count,timestamp,dry_run,index_retry,skip_health_check,must_gather,es_ignored_metadata):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
     # osde2e takes a relative path to the account file so we need to create it in a working dir and
@@ -150,7 +149,7 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
         _download_kubeconfig(osde2ectl_cmd, cluster_path)
         if es is not None:
             metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-            common._index_result(es,index,metadata, ignoreMetadata,index_retry)
+            common._index_result(es,index,metadata, es_ignored_metadata,index_retry)
 
 def _watcher(osde2ectl_cmd,account_config,my_path,cluster_count,delay,my_uuid):
     logging.info('Watcher thread started')
@@ -230,79 +229,14 @@ def _cleanup_clusters(osde2ectl_cmd,my_path,account_config):
     logging.info(error)
 
 def main():
-    parser = argparse.ArgumentParser(description="osde2e wrapper script")
+    parser = argparse.ArgumentParser(description="osde2e wrapper script",
+                                     parents=[parentParser._parentParser])
     parser.add_argument(
         '--account-config',
         help='Yaml account config')
     parser.add_argument(
-        '--es-url',
-        help='Provide ES connection URL')
-    parser.add_argument(
-        '--es-insecure',
-        dest='es_insecure',
-        action='store_true',
-        help='if ES is setup with ssl, but can disable tls cert verification')
-    parser.add_argument(
-        '--es-index',
-        help='The index to write to',
-        default='osde2e-install-timings')
-    parser.add_argument(
-        '--es-index-retry',
-        help='Number of retries (default: 5) on ES uploading. The time between retries increases exponentially',
-        default=5,
-        type=int)
-    parser.add_argument(
-        '--es-index-only',
-        dest='es_index_only',
-        action='store_true',
-        help='Do not install any new cluster, just upload to ES all metadata files found on PATH')
-    parser.add_argument(
-        '--es-ignored-metadata',
-        dest='es_ignored_metadata',
-        default=_es_ignored_metadata,
-        nargs='+',
-        help='List of keys to ignore from the metadata file.')
-    parser.add_argument(
-        '--uuid',
-        help='UUID to provide to ES')
-    parser.add_argument(
         '-c', '--command',
         help='Full path to the osde2e and osde2ectl command directory. If not provided we will download and compile the latest')
-    parser.add_argument(
-        '--path',
-        help='Path to save temporary data')
-    parser.add_argument(
-        '--cleanup',
-        help='Should we delete the temporary directory',
-        default=False)
-    parser.add_argument(
-        '--cluster-name-seed',
-        type=str,
-        default='osde2e',
-        help='Seed used to generate cluster names. 6 chars max')
-    parser.add_argument(
-        '--cluster-count',
-        default=1,
-        type=int,
-        help='Total number of clusters to create')
-    parser.add_argument(
-        '--batch-size',
-        default=0,
-        type=int,
-        help='number of clusters in a batch')
-    parser.add_argument(
-        '--watcher-delay',
-        default=60,
-        type=int,
-        help='Delay between each status check')
-    parser.add_argument(
-        '--expire',
-        type=int,
-        help='Minutes until cluster expires and it is deleted by OSD')
-    parser.add_argument(
-        '--cleanup-clusters',
-        default=True,
-        help='Cleanup any non-error state clusters upon test completion')
     parser.add_argument(
         '--user-override',
         type=str,
@@ -311,17 +245,6 @@ def main():
         '--aws-account-file',
         type=str,
         help='AWS account file to use')
-    parser.add_argument(
-        '--delay-between-batch',
-        type=int,
-        help='If set it will wait x seconds between each batch request')
-    parser.add_argument(
-        '--log-file',
-        help='File where to write logs')
-    parser.add_argument(
-        '--log-level',
-        default='INFO',
-        help='Log level to show')
     parser.add_argument(
         '--dry-run',
         dest='dry_run',
@@ -342,8 +265,11 @@ def main():
     if not args.es_index_only and not args.account_config:
         parser.error('the following arguments are required: --account-config')
 
+    _es_ignored_metadata = []
     if args.es_url is not None:
         es = common._connect_to_es(args.es_url, args.es_insecure)
+        if args.es_ignored_metadata is None:
+            _es_ignored_metadata = str(args.es_ignored_metadata).split(',')
     else:
         es = None
 
@@ -379,7 +305,7 @@ def main():
                 except Exception as err:
                     logging.error(err)
                     logging.error('Failed to load metadata.json file located %s' % metadata_file)
-                index_result += common._index_result(es,args.es_index,metadata,args.es_ignored_metadata,args.es_index_retry)
+                index_result += common._index_result(es,args.es_index,metadata,_es_ignored_metadata,args.es_index_retry)
         else:
             logging.error('PATH and elastic related parameters required when uploading data to elastic')
             exit(1)
@@ -525,7 +451,7 @@ def main():
                 logging.debug('Starting Cluster thread %d for cluster %s' % (loop_counter + 1,my_cluster_config['cluster']['name']))
                 try:
                     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,args.cluster_count,timestamp,args.dry_run,args.es_index_retry,args.skip_health_check,args.osde2e_must_gather,args.es_ignored_metadata))
+                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,args.cluster_count,timestamp,args.dry_run,args.es_index_retry,args.skip_health_check,args.osde2e_must_gather,_es_ignored_metadata))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)

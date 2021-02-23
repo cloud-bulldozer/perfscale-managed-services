@@ -26,6 +26,7 @@ import threading
 import random
 import string
 from libs import common
+from libs import parentParser
 
 # If rosa command path is provided verify we can run the help function
 # If it is not provided, dowload binary from the latest tag
@@ -106,7 +107,7 @@ def _install_addons(rosa_cmnd,cluster_id,addons):
             logging.error(addon_stderr.strip().decode("utf-8"))
         # TODO: control addon is installed with: rosa list addons -c <<cluster_name>>
 
-def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,index,my_uuid,my_inc,timestamp,index_retry,addons):
+def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,index,my_uuid,my_inc,timestamp,index_retry,addons,es_ignored_metadata):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
     metadata = {}
@@ -166,7 +167,7 @@ def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,in
         logging.error('Failed to write metadata.json file located %s' % cluster_path)
     if es is not None:
         metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        common._index_result(es,index,metadata,index_retry)
+        common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
 
 def _watcher(rosa_cmnd,cluster_name_seed,cluster_count,delay,my_uuid):
     time.sleep(30)
@@ -231,80 +232,11 @@ def _cleanup_clusters(rosa_cmnd,cluster_name_seed):
     logging.info(error)
 
 def main():
-    parser = argparse.ArgumentParser(description="osde2e wrapper script")
-    parser.add_argument(
-        '--es-url',
-        help='Provide ES connection URL')
-    parser.add_argument(
-        '--es-insecure',
-        dest='es_insecure',
-        action='store_true',
-        help='if ES is setup with ssl, but can disable tls cert verification')
-    parser.add_argument(
-        '--es-index',
-        help='The index to write to',
-        default='osde2e-install-timings')
-    parser.add_argument(
-        '--es-index-retry',
-        help='Number of retries (default: 5) on ES uploading. The time between retries increases exponentially',
-        default=5,
-        type=int)
-    parser.add_argument(
-        '--es-index-only',
-        dest='es_index_only',
-        action='store_true',
-        help='Do not install any new cluster, just upload to ES all metadata files found on PATH')
-    parser.add_argument(
-        '--uuid',
-        help='UUID to provide to ES')
+    parser = argparse.ArgumentParser(description="osde2e wrapper script",
+                                     parents=[parentParser._parentParser])
     parser.add_argument(
         '--rosa-cli',
         help='Full path to the rosa cli binary. If not provided we will download latest')
-    parser.add_argument(
-        '--path',
-        help='Path to save temporary data')
-    parser.add_argument(
-        '--cluster-name-seed',
-        type=str,
-        help='Seed used to generate cluster names.')
-    parser.add_argument(
-        '--cleanup',
-        help='Should we delete the temporary directory',
-        default=False)
-    parser.add_argument(
-        '--cluster-count',
-        default=1,
-        type=int,
-        help='Total number of clusters to create')
-    parser.add_argument(
-        '--batch-size',
-        default=0,
-        type=int,
-        help='number of clusters in a batch')
-    parser.add_argument(
-        '--watcher-delay',
-        default=60,
-        type=int,
-        help='Delay between each status check')
-    parser.add_argument(
-        '--expire',
-        type=int,
-        help='Minutes until cluster expires and it is deleted by OSD')
-    parser.add_argument(
-        '--cleanup-clusters',
-        default=True,
-        help='Cleanup any non-error state clusters upon test completion')
-    parser.add_argument(
-        '--delay-between-batch',
-        type=int,
-        help='If set it will wait x seconds between each batch request')
-    parser.add_argument(
-        '--log-file',
-        help='File where to write logs')
-    parser.add_argument(
-        '--log-level',
-        default='INFO',
-        help='Log level to show')
     parser.add_argument(
         '--rosa-init',
         dest='rosa_init',
@@ -337,8 +269,11 @@ def main():
     if not args.es_index_only and (not args.rosa_token or not args.cluster_name_seed):
         parser.error('the following arguments are required: --rosa-token AND --cluster-name-seed')
 
+    _es_ignored_metadata = []
     if args.es_url is not None:
         es = common._connect_to_es(args.es_url, args.es_insecure)
+        if args.es_ignored_metadata is None:
+            _es_ignored_metadata = str(args.es_ignored_metadata).split(',')
     else:
         es = None
 
@@ -374,7 +309,7 @@ def main():
                 except Exception as err:
                     logging.error(err)
                     logging.error('Failed to load metadata.json file located %s' % metadata_file)
-                index_result += common._index_result(es,args.es_index,metadata,args.es_index_retry)
+                index_result += common._index_result(es,args.es_index,metadata,_es_ignored_metadata,args.es_index_retry)
         else:
             logging.error('PATH and elastic related parameters required when uploading data to elastic')
             exit(1)
@@ -485,7 +420,7 @@ def main():
                 logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
                 try:
                     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    thread = threading.Thread(target=_build_cluster,args=(rosa_cmnd,cluster_name_seed,args.expire,args.rosa_azs,my_path,es,args.es_index,my_uuid,loop_counter,timestamp,args.es_index_retry,args.rosa_addons))
+                    thread = threading.Thread(target=_build_cluster,args=(rosa_cmnd,cluster_name_seed,args.expire,args.rosa_azs,my_path,es,args.es_index,my_uuid,loop_counter,timestamp,args.es_index_retry,args.rosa_addons,_es_ignored_metadata))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
