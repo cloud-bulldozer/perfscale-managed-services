@@ -1,5 +1,0 @@
-elasticsearch
-urllib3
-elasticsearch_dsl
-GitPython
-ruamel.yaml

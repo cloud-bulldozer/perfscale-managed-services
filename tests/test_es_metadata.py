@@ -12,8 +12,8 @@
 #   limitations under the License.
 
 import unittest
-import importlib
 import json
+from libs import common
 
 
 metadata = json.loads("""
@@ -112,12 +112,11 @@ expected2 = {'timestamp': '2021-02-05T16:16:11',
 class TestBuildDocument(unittest.TestCase):
 
     def test_buildDoc(self):
-        wrapper = importlib.import_module("osde2e-wrapper")
-        doc = wrapper._buildDoc(metadata, [])
+        doc = common._buildDoc(metadata, [])
         self.maxDiff = None
         self.assertDictEqual(doc,expected)
         # Test ignored<etadata feature
-        doc = wrapper._buildDoc(metadata, ['before-suite-metrics','eof'])
+        doc = common._buildDoc(metadata, ['before-suite-metrics','eof'])
         self.maxDiff = None
         self.assertDictEqual(doc,expected2)
 
@@ -131,7 +130,6 @@ class Case(object):
 class TestParseValues(unittest.TestCase):
 
     def test_getValue(self):
-        wrapper = importlib.import_module("osde2e-wrapper")
         cases = []
         cases.append(Case("01-boolean", True, bool, False))
         cases.append(Case("02-boolean", False, bool, False))
@@ -190,7 +188,7 @@ class TestParseValues(unittest.TestCase):
         cases.append(Case("11-dict", {'1': {'2': {'3': {'4': 6}}}}, dict, False))
 
         for case in cases:
-            v = wrapper._getValue(case.value,[])
+            v = common._getValue(case.value,[])
             if not case.expectError:
                 self.assertEqual(case.expectedType, type(v), "error in case {}: input {}".format(case.caseName, case.value))
             else:
