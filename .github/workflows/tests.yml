@@ -27,6 +27,3 @@ jobs:
     - name: Tox
       run: |
         tox .
-    - name: Unit tests
-      run: |
-        python -m unittest tests/test_es_metadata.py

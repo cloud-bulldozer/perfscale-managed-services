@@ -4,6 +4,8 @@ import time
 import os
 import errno
 
+_es_ignored_metadata = "before-suite-metrics,route-latencies,route-throughputs,route-availabilities,healthchecks,healthcheckIteration,status"
+
 def _connect_to_es(es_url, insecure):
     if es_url.startswith('https://'):
         import urllib3
@@ -22,8 +24,8 @@ def _connect_to_es(es_url, insecure):
         exit(1)
     return es
 
-def _index_result(es,index,metadata,ignoreMetadata,index_retry):
-    my_doc = _buildDoc(metadata, ignoreMetadata)
+def _index_result(es,index,metadata,es_ignored_metadata,index_retry):
+    my_doc = _buildDoc(metadata, es_ignored_metadata)
 
     logging.debug('Document to be uploaded to ES:')
     logging.debug(my_doc)
@@ -43,13 +45,13 @@ def _index_result(es,index,metadata,ignoreMetadata,index_retry):
         logging.error('Reached the maximun number of retries: %d, ES upload failed for %s' % (index_retry, my_doc['cluster_id']))
         return 1
 
-def _buildDoc(metadata, ignoreMetadata):
+def _buildDoc(metadata, es_ignored_metadata):
 
     my_doc = {}
-    my_doc = _getValue(metadata, ignoreMetadata)
+    my_doc = _getValue(metadata, es_ignored_metadata)
     return my_doc
 
-def _getValue(value, ignoreMetadata):
+def _getValue(value, es_ignored_metadata):
     # Parse booleans
     if isinstance(value, bool):
         return bool(value)
@@ -75,10 +77,10 @@ def _getValue(value, ignoreMetadata):
     elif isinstance(value, dict):
         dictionary = {}
         for key in value:
-            if key not in ignoreMetadata:
+            if key not in es_ignored_metadata:
                 val = value[key]
                 key = key.replace('-', '_').replace(' ', '_').lower()
-                v = _getValue(val, ignoreMetadata)
+                v = _getValue(val, es_ignored_metadata)
                 dictionary[key] = v
         return dictionary
     return
