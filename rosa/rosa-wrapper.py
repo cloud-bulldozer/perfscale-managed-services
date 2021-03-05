@@ -26,6 +26,7 @@ import threading
 import random
 import string
 from libs import common
+from libs import parentParsers
 
 # If rosa command path is provided verify we can run the help function
 # If it is not provided, dowload binary from the latest tag
@@ -231,85 +232,14 @@ def _cleanup_clusters(rosa_cmnd,cluster_name_seed):
     logging.info(error)
 
 def main():
-    parser = argparse.ArgumentParser(description="osde2e wrapper script")
-    parser.add_argument(
-        '--es-url',
-        help='Provide ES connection URL')
-    parser.add_argument(
-        '--es-insecure',
-        dest='es_insecure',
-        action='store_true',
-        help='if ES is setup with ssl, but can disable tls cert verification')
-    parser.add_argument(
-        '--es-index',
-        help='The index to write to',
-        default='osde2e-install-timings')
-    parser.add_argument(
-        '--es-index-retry',
-        help='Number of retries (default: 5) on ES uploading. The time between retries increases exponentially',
-        default=5,
-        type=int)
-    parser.add_argument(
-        '--es-index-only',
-        dest='es_index_only',
-        action='store_true',
-        help='Do not install any new cluster, just upload to ES all metadata files found on PATH')
-    parser.add_argument(
-        '--es-ignored-metadata',
-        dest='es_ignored_metadata',
-        default=common._es_ignored_metadata,
-        help='List of coma separated keys to ignore from the metadata file.')
-    parser.add_argument(
-        '--uuid',
-        help='UUID to provide to ES')
+    parser = argparse.ArgumentParser(description="osde2e wrapper script",
+                                     parents=[parentParsers.esParser,
+                                              parentParsers.runnerParser,
+                                              parentParsers.clusterParser,
+                                              parentParsers.logParser])
     parser.add_argument(
         '--rosa-cli',
         help='Full path to the rosa cli binary. If not provided we will download latest')
-    parser.add_argument(
-        '--path',
-        help='Path to save temporary data')
-    parser.add_argument(
-        '--cluster-name-seed',
-        type=str,
-        help='Seed used to generate cluster names.')
-    parser.add_argument(
-        '--cleanup',
-        help='Should we delete the temporary directory',
-        default=False)
-    parser.add_argument(
-        '--cluster-count',
-        default=1,
-        type=int,
-        help='Total number of clusters to create')
-    parser.add_argument(
-        '--batch-size',
-        default=0,
-        type=int,
-        help='number of clusters in a batch')
-    parser.add_argument(
-        '--watcher-delay',
-        default=60,
-        type=int,
-        help='Delay between each status check')
-    parser.add_argument(
-        '--expire',
-        type=int,
-        help='Minutes until cluster expires and it is deleted by OSD')
-    parser.add_argument(
-        '--cleanup-clusters',
-        default=True,
-        help='Cleanup any non-error state clusters upon test completion')
-    parser.add_argument(
-        '--delay-between-batch',
-        type=int,
-        help='If set it will wait x seconds between each batch request')
-    parser.add_argument(
-        '--log-file',
-        help='File where to write logs')
-    parser.add_argument(
-        '--log-level',
-        default='INFO',
-        help='Log level to show')
     parser.add_argument(
         '--rosa-init',
         dest='rosa_init',
