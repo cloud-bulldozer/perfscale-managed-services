@@ -106,7 +106,7 @@ def _install_addons(rosa_cmnd,cluster_id,addons):
             logging.error(addon_stderr.strip().decode("utf-8"))
         # TODO: control addon is installed with: rosa list addons -c <<cluster_name>>
 
-def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,index,my_uuid,my_inc,timestamp,index_retry,addons):
+def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,index,my_uuid,my_inc,timestamp,index_retry,addons,es_ignored_metadata):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
     metadata = {}
@@ -166,7 +166,7 @@ def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,in
         logging.error('Failed to write metadata.json file located %s' % cluster_path)
     if es is not None:
         metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        common._index_result(es,index,metadata,ignoreMetadata,index_retry)
+        common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
 
 def _watcher(rosa_cmnd,cluster_name_seed,cluster_count,delay,my_uuid):
     time.sleep(30)
@@ -255,6 +255,11 @@ def main():
         action='store_true',
         help='Do not install any new cluster, just upload to ES all metadata files found on PATH')
     parser.add_argument(
+        '--es-ignored-metadata',
+        dest='es_ignored_metadata',
+        default=common._es_ignored_metadata,
+        help='List of coma separated keys to ignore from the metadata file.')
+    parser.add_argument(
         '--uuid',
         help='UUID to provide to ES')
     parser.add_argument(
@@ -337,8 +342,11 @@ def main():
     if not args.es_index_only and (not args.rosa_token or not args.cluster_name_seed):
         parser.error('the following arguments are required: --rosa-token AND --cluster-name-seed')
 
+    _es_ignored_metadata = []
     if args.es_url is not None:
         es = common._connect_to_es(args.es_url, args.es_insecure)
+        if args.es_ignored_metadata is None:
+            _es_ignored_metadata = str(args.es_ignored_metadata).split(',')
     else:
         es = None
 
@@ -374,7 +382,7 @@ def main():
                 except Exception as err:
                     logging.error(err)
                     logging.error('Failed to load metadata.json file located %s' % metadata_file)
-                index_result += common._index_result(es,args.es_index,metadata,args.es_ignored_metadata,args.es_index_retry)
+                index_result += common._index_result(es,args.es_index,metadata,_es_ignored_metadata,args.es_index_retry)
         else:
             logging.error('PATH and elastic related parameters required when uploading data to elastic')
             exit(1)
@@ -485,7 +493,7 @@ def main():
                 logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
                 try:
                     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    thread = threading.Thread(target=_build_cluster,args=(rosa_cmnd,cluster_name_seed,args.expire,args.rosa_azs,my_path,es,args.es_index,my_uuid,loop_counter,timestamp,args.es_index_retry,args.rosa_addons))
+                    thread = threading.Thread(target=_build_cluster,args=(rosa_cmnd,cluster_name_seed,args.expire,args.rosa_azs,my_path,es,args.es_index,my_uuid,loop_counter,timestamp,args.es_index_retry,args.rosa_addons,_es_ignored_metadata))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
