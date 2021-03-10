@@ -30,6 +30,12 @@ def _index_result(es,index,metadata,es_ignored_metadata,index_retry):
     logging.debug('Document to be uploaded to ES:')
     logging.debug(my_doc)
 
+    _id = ""
+    if 'cluster_id' in dict(my_doc).keys():
+        _id = my_doc['cluster_id']
+    else:
+        _id = my_doc['cluster_name']
+
     for attempt in range(index_retry + 1):
         try:
             time.sleep(5 * attempt)
@@ -39,10 +45,10 @@ def _index_result(es,index,metadata,es_ignored_metadata,index_retry):
             logging.error(e)
             logging.error('Failed to upload to ES, waiting %d seconds for next upload retry' % (5 * (attempt + 1)))
         else:
-            logging.debug('ES upload successful for cluster id %s' % my_doc['cluster_id'])
+            logging.debug('ES upload successful for cluster id %s' % _id)
             return 0
     else:
-        logging.error('Reached the maximun number of retries: %d, ES upload failed for %s' % (index_retry, my_doc['cluster_id']))
+        logging.error('Reached the maximun number of retries: %d, ES upload failed for %s' % (index_retry, _id))
         return 1
 
 def _buildDoc(metadata, es_ignored_metadata):

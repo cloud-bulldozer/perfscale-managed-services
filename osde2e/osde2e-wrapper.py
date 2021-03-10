@@ -133,6 +133,7 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
             logging.error('Check installation.log and test_output.log files on %s for errors' % (cluster_path + "/"))
             success = False
         logging.info('Attempting to load metadata json')
+        metadata = {}
         try:
             metadata = json.load(open(cluster_path + "/metadata.json"))
         except Exception as err:
