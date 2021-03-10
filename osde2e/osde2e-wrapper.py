@@ -82,7 +82,7 @@ def _download_kubeconfig(osde2ectl_cmd,my_path):
         logging.error(err)
         logging.error('Failed to load metadata.json file located %s, kubeconfig file wont be downloaded' % my_path)
         return 0
-    if 'cluster_id' in metadata and metadata['cluster-id'] != "":
+    if 'cluster-id' in metadata and metadata['cluster-id'] != "":
         cluster_id = metadata['cluster-id']
         # required to create a new folder on kubeconfig_path until https://github.com/openshift/osde2e/issues/657 will be fixed
         kubeconfig_path = my_path + "/" + cluster_id
