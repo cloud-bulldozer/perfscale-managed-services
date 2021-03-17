@@ -454,6 +454,8 @@ def main():
                 create_cluster = True
 
             if create_cluster:
+                if "cluster" not in my_cluster_config.keys():
+                    my_cluster_config['cluster'] = {}
                 my_cluster_config['cluster']['name'] = cluster_name_seed + "-" + str(loop_counter).zfill(4)
                 logging.debug('Starting Cluster thread %d for cluster %s' % (loop_counter + 1,my_cluster_config['cluster']['name']))
                 try:
