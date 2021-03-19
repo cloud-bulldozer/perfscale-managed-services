@@ -23,8 +23,6 @@ import logging
 import git
 import threading
 import copy
-import string
-import random
 from libs import common
 from libs import parentParsers
 from ruamel.yaml import YAML
@@ -363,13 +361,7 @@ def main():
         logging.error('No ocm token supplied in configuration file: %s' % args.account_config)
         exit(1)
 
-    cluster_name_seed = args.cluster_name_seed
-    allowed_chars = string.ascii_lowercase + string.digits
-    random_string = ''.join(random.choice(allowed_chars) for j in range(3))
-    if len(cluster_name_seed) > 6:
-        logging.warning('Cluster Name Seed too long (%d), truncated to %s' % (len(cluster_name_seed), cluster_name_seed[:6]))
-        cluster_name_seed = cluster_name_seed[:6]
-    cluster_name_seed += "-" + random_string
+    cluster_name_seed = common._generate_cluster_name_seed(args.cluster_name_seed)
 
     # Set the user override if provided on the cli or generate a new one
     # if none is set

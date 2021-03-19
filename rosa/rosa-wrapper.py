@@ -23,8 +23,6 @@ import requests
 import urllib
 import logging
 import threading
-import random
-import string
 from libs import common
 from libs import parentParsers
 
@@ -345,6 +343,8 @@ def main():
         logging.error(err)
         exit(1)
 
+    cluster_name_seed = common._generate_cluster_name_seed(args.cluster_name_seed)
+
     rosa_cmnd = _verify_cmnd(args.rosa_cli,my_path)
 
     logging.info('Attempting to log in OCM using `rosa login`')
@@ -383,14 +383,6 @@ def main():
         else:
             logging.info('`rosa init` execution OK')
             logging.debug(rosa_init_stdout.strip().decode("utf-8"))
-
-    cluster_name_seed = args.cluster_name_seed
-    allowed_chars = string.ascii_lowercase + string.digits
-    random_string = ''.join(random.choice(allowed_chars) for j in range(3))
-    if len(cluster_name_seed) > 6:
-        logging.warning('Cluster Name Seed too long (%d), truncated to %s' % (len(cluster_name_seed), cluster_name_seed[:6]))
-        cluster_name_seed = cluster_name_seed[:6]
-    cluster_name_seed += "-" + random_string
 
     # launch watcher thread to report status
     logging.info('Launching watcher thread')

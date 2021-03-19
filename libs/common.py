@@ -3,6 +3,8 @@ import logging
 import time
 import os
 import errno
+import string
+import random
 
 _es_ignored_metadata = "before-suite-metrics,route-latencies,route-throughputs,route-availabilities,healthchecks,healthcheckIteration,status"
 
@@ -99,3 +101,17 @@ def _create_path(my_path):
         if e.errno != errno.EEXIST:
             logging.error(e)
             exit(1)
+
+def _generate_cluster_name_seed(cluster_name_seed):
+    _cluster_name_seed = cluster_name_seed
+    allowed_chars = string.ascii_lowercase + string.digits
+    for l in _cluster_name_seed:
+        if l not in allowed_chars:
+            logging.error('Cluster name seed is not valid: %s\nCluster name seed must contain only lowercase letters and digits.' % _cluster_name_seed)
+            exit(1)
+    random_string = ''.join(random.choice(allowed_chars) for j in range(3))
+    if len(_cluster_name_seed) > 6:
+        logging.warning('Cluster Name Seed too long (%d), truncated to %s' % (len(_cluster_name_seed), _cluster_name_seed[:6]))
+        _cluster_name_seed = _cluster_name_seed[:6]
+    _cluster_name_seed += "-" + random_string
+    return _cluster_name_seed
