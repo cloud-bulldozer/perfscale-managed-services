@@ -308,7 +308,7 @@ def main():
             metadata_files = list(Path(args.path).rglob("metadata.json"))
             logging.debug('Metadata files found: %s' % metadata_files)
             for metadata_file in metadata_files:
-                logging.info('Attempting to load metadata json %s' % metadata_file)
+                logging.debug('Attempting to load metadata json %s' % metadata_file)
                 try:
                     metadata = json.load(open(metadata_file))
                     metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
