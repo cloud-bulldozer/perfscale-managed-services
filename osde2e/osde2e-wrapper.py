@@ -73,7 +73,7 @@ def _verify_cmnd(osde2e_cmnd,my_path):
     return osde2e_cmnd
 
 def _download_kubeconfig(osde2ectl_cmd,my_path):
-    logging.info('Attempting to load metadata json')
+    logging.debug('Attempting to load metadata json')
     try:
         metadata = json.load(open(my_path + "/metadata.json"))
     except Exception as err:
@@ -130,7 +130,7 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
             logging.error('Failed to build cluster %d: %s' % (my_inc,account_config['cluster']['name']))
             logging.error('Check installation.log and test_output.log files on %s for errors' % (cluster_path + "/"))
             success = False
-        logging.info('Attempting to load metadata json')
+        logging.debug('Attempting to load metadata json')
         metadata = {}
         try:
             metadata = json.load(open(cluster_path + "/metadata.json"))
@@ -303,7 +303,7 @@ def main():
             metadata_files = list(Path(args.path).rglob("metadata.json"))
             logging.debug('Metadata files found: %s' % metadata_files)
             for metadata_file in metadata_files:
-                logging.info('Attempting to load metadata json %s' % metadata_file)
+                logging.debug('Attempting to load metadata json %s' % metadata_file)
                 try:
                     metadata = json.load(open(metadata_file))
                     metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")

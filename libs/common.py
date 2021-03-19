@@ -41,7 +41,7 @@ def _index_result(es,index,metadata,es_ignored_metadata,index_retry):
     for attempt in range(index_retry + 1):
         try:
             time.sleep(5 * attempt)
-            logging.info('Attempting to upload (Attempt: %d) information to ES server with index %s' % (attempt, index))
+            logging.debug('Attempting to upload (Attempt: %d) information to ES server with index %s' % (attempt, index))
             es.index(index=index, body=my_doc)
         except Exception as e:
             logging.error(e)
