@@ -72,6 +72,7 @@ without uploading any information**
 | --cleanup-clusters | Cleanup any non-error state clusters upon test completion. | True |
 | --log-file | File where to write logs. | -- |
 | --log-level | Level of logs to show. | INFO |
+| --only-delete-clusters | Delete clusters found on folder specified by **--path**.<br>**NOTE: It will fail if no cluster_name_seed file is found on folder | False |
 
 ## AWS Configuration File
 

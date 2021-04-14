@@ -208,6 +208,7 @@ def _watcher(osde2ectl_cmd,cluster_name_seed,account_config,my_path,cluster_coun
 
 def _cleanup_clusters(osde2ectl_cmd,cluster_name_seed,my_path,account_config):
     logging.info('Starting cluster cleanup')
+    exit_status = 0
     cmd = [osde2ectl_cmd, "list", "--custom-config", "account_config.yaml"]
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
     stdout,stderr = process.communicate()
@@ -225,10 +226,12 @@ def _cleanup_clusters(osde2ectl_cmd,cluster_name_seed,my_path,account_config):
                     logging.error('Cluster cleanup failed for cluster id %s with this stdout/stderr:' % cluster_id)
                     logging.error(stdout)
                     logging.error(stderr)
+                    exit_status = 1
             else:
                 error.append(cluster_id)
     logging.info('Clusters in error state. Not deleting:')
     logging.info(error)
+    return exit_status
 
 def main():
     parser = argparse.ArgumentParser(description="osde2e wrapper script",
@@ -268,7 +271,10 @@ def main():
     args = parser.parse_args()
 
     if not args.es_index_only and not args.account_config:
-        parser.error('the following arguments are required: --account-config')
+        parser.error("argument '--account-config' is required (except when using '--es-index-only')")
+
+    if args.only_delete_clusters and not args.path:
+        parser.error("argument '--path' is required when using '--only-delete-clusters'")
 
     _es_ignored_metadata = []
     if args.es_url is not None:
@@ -316,6 +322,27 @@ def main():
             exit(1)
         exit(index_result)
 
+    if args.only_delete_clusters:
+        try:
+            logging.info('Reading cluster name seed from %s' % args.path)
+            cluster_name_seed_file = open(args.path + '/cluster_name_seed')
+            cluster_name_seed = cluster_name_seed_file.read().replace("\n","")
+            logging.info('Found cluster name seed as: %s' % cluster_name_seed)
+        except Exception as err:
+            logging.error(err)
+            logging.error('Failed to read %s/cluster_name_seed file' % args.path)
+            exit(1)
+        try:
+            yaml = YAML(pure=True)
+            account_config = yaml.load(open(args.account_config))
+        except Exception as err:
+            logging.error(err)
+            logging.error('Failed to load account configuration yaml')
+            exit(1)
+        cmnd_path = _verify_cmnd(args.command,args.path)
+        cleanup_result = _cleanup_clusters(cmnd_path + "/osde2ectl",cluster_name_seed,args.path,account_config)
+        exit(cleanup_result)
+
     # global uuid to assign for the group of clusters created. each cluster will have its own cluster-id
     my_uuid = args.uuid
     if my_uuid is None:
@@ -362,6 +389,16 @@ def main():
         exit(1)
 
     cluster_name_seed = common._generate_cluster_name_seed(args.cluster_name_seed)
+
+    try:
+        logging.debug('Saving cluster name seed %s to the working directory' % cluster_name_seed)
+        seed_file = open(my_path + '/cluster_name_seed','x')
+        seed_file.write(cluster_name_seed)
+        seed_file.close()
+    except Exception as err:
+        logging.debug('Cannot write file %s/cluster_name_seed' % my_path)
+        logging.error(err)
+        exit(1)
 
     # Set the user override if provided on the cli or generate a new one
     # if none is set

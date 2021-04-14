@@ -74,7 +74,7 @@ clusterParser = argparse.ArgumentParser(add_help=False)
 clusterParser.add_argument(
     '--cluster-name-seed',
     type=str,
-    default='osde2e',
+    default='perfsc',
     help='Seed used to generate cluster names. 6 chars max')
 clusterParser.add_argument(
     '--cluster-count',
@@ -89,7 +89,11 @@ clusterParser.add_argument(
     '--cleanup-clusters',
     default=True,
     help='Cleanup any non-error state clusters upon test completion')
-
+clusterParser.add_argument(
+    '--only-delete-clusters',
+    dest='only_delete_clusters',
+    action='store_true',
+    help="Just delete clusters found on folder specified by '--path' and exit")
 
 logParser = argparse.ArgumentParser(add_help=False)
 logParser.add_argument(
