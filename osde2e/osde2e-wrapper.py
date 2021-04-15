@@ -171,14 +171,14 @@ def _watcher(osde2ectl_cmd,cluster_name_seed,account_config,my_path,cluster_coun
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
         stdout,stderr = process.communicate()
 
-        cluster_count = 0
+        current_cluster_count = 0
         state = {}
         status = {}
         error = []
         # Count the various states/status' and report it to logging
         for line in stdout.splitlines():
             if cluster_name_seed in line:
-                cluster_count += 1
+                current_cluster_count += 1
                 state_key = line.split()[2]
                 status_key = line.split()[3]
                 state[state_key] = state.get(state_key, 0) + 1
@@ -189,11 +189,11 @@ def _watcher(osde2ectl_cmd,cluster_name_seed,account_config,my_path,cluster_coun
                     logging.debug(line.split()[1])
 
         logging.info('Requested Clusters for test %s: %d' % (my_uuid,cluster_count))
-        if cluster_count != 0:
+        if current_cluster_count != 0:
             logging.debug(state.items())
             logging.debug(status.items())
-            state_output = "Current clusters state: " + str(cluster_count) + " clusters"
-            status_output = "Current clusters status: " + str(cluster_count) + " clusters"
+            state_output = "Current clusters state: " + str(current_cluster_count) + " clusters"
+            status_output = "Current clusters status: " + str(current_cluster_count) + " clusters"
             for i1 in state.items():
                 state_output += " (" + str(i1[0]) + ": " + str(i1[1]) + ")"
             for i2 in status.items():
@@ -202,7 +202,9 @@ def _watcher(osde2ectl_cmd,cluster_name_seed,account_config,my_path,cluster_coun
             logging.info(status_output)
             if error:
                 logging.warning('Clusters in error state: %s' % error)
-
+            account_config['clusters_created'] = current_cluster_count
+            account_config['state'] = state
+            account_config['status'] = status
         time.sleep(delay)
     logging.info('Watcher exiting')
 
@@ -517,11 +519,24 @@ def main():
         watcher.run = False
         watcher.join()
 
-    if args.cleanup_clusters is True and not args.dry_run:
-        _cleanup_clusters(cmnd_path + "/osde2ectl",cluster_name_seed,my_path,account_config)
+    if args.cleanup_clusters and not args.dry_run:
+        cleanup = _cleanup_clusters(cmnd_path + "/osde2ectl",cluster_name_seed,my_path,account_config)
 
     if args.cleanup is True:
         shutil.rmtree(my_path)
+
+# Last, output test result
+    if not args.dry_run:
+        logging.info('************************************************************************')
+        logging.info('********* Resume for test %s *********' % (my_uuid))
+        logging.info('************************************************************************')
+        logging.info('Requested Clusters for test %s: %d' % (my_uuid,args.cluster_count))
+        logging.info('Created   Clusters for test %s: %d' % (my_uuid,account_config['clusters_created']))
+        for i1 in account_config['state'].items():
+            logging.info('              %s: %s' % (str(i1[0]),str(i1[1])))
+        logging.info('Batches size: %s' % (str(args.batch_size)))
+        logging.info('Delay between batches: %s' % (str(args.delay_between_batch)))
+        logging.info('Cluster Name Seed: %s' % (cluster_name_seed))
 
 
 if __name__ == '__main__':
