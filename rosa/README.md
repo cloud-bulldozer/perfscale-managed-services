@@ -69,7 +69,7 @@ without uploading any information**
 | --delay-between-batch | If set, we will wait X seconds between each batch request | -- |
 | --watcher-delay | Delay between each status check in seconds. | 60 |
 | --expire | Minutes until cluster expires and it is deleted by OSD. It sets CLUSTER_EXPIRY_IN_MINUTES var for osde2e | -- |
-| --cleanup-clusters | Cleanup any non-error state clusters upon test completion. | True |
+| --cleanup-clusters | Cleanup any non-error state clusters upon test completion. | False |
 | --log-file | File where to write logs. | -- |
 | --log-level | Level of logs to show. | INFO |
 | --only-delete-clusters | Delete clusters found on folder specified by **--path**.<br>**NOTE: It will fail if no cluster_name_seed file is found on folder | False |

@@ -520,16 +520,16 @@ def main():
         watcher.join()
 
     if args.cleanup_clusters and not args.dry_run:
-        cleanup = _cleanup_clusters(cmnd_path + "/osde2ectl",cluster_name_seed,my_path,account_config)
-        logging.warning('Cleanup process failed') if cleanup != 0 else None
+        cleanup_result = _cleanup_clusters(cmnd_path + "/osde2ectl",cluster_name_seed,my_path,account_config)
+        logging.warning('Cleanup process failed') if cleanup_result != 0 else None
 
-    if args.cleanup is True:
+    if args.cleanup:
         shutil.rmtree(my_path)
 
 # Last, output test result
     if not args.dry_run:
         logging.info('************************************************************************')
-        logging.info('********* Resume for test %s *********' % (my_uuid))
+        logging.info('********* Summary for test %s *********' % (my_uuid))
         logging.info('************************************************************************')
         logging.info('Requested Clusters for test %s: %d' % (my_uuid,args.cluster_count))
         logging.info('Created   Clusters for test %s: %d' % (my_uuid,account_config['clusters_created']))

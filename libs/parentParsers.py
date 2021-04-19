@@ -54,7 +54,8 @@ runnerParser.add_argument(
 runnerParser.add_argument(
     '--cleanup',
     help='Should we delete the temporary directory',
-    default=False)
+    dest='cleanup',
+    action='store_true')
 runnerParser.add_argument(
     '--delay-between-batch',
     type=int,
@@ -87,7 +88,8 @@ clusterParser.add_argument(
     help='Minutes until cluster expires and it is deleted by OSD')
 clusterParser.add_argument(
     '--cleanup-clusters',
-    default=True,
+    dest='cleanup_clusters',
+    action='store_true',
     help='Cleanup any non-error state clusters upon test completion')
 clusterParser.add_argument(
     '--only-delete-clusters',
