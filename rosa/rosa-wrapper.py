@@ -169,7 +169,7 @@ def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,in
         metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
 
-def _watcher(rosa_cmnd,cluster_name_seed,cluster_count,delay,my_uuid):
+def _watcher(rosa_cmnd,cluster_name_seed,cluster_count,delay,my_uuid,clusters_resume):
     time.sleep(30)
     logging.info('Watcher thread started')
     logging.info('Getting status every %d seconds' % int(delay))
@@ -201,7 +201,8 @@ def _watcher(rosa_cmnd,cluster_name_seed,cluster_count,delay,my_uuid):
             logging.info(state_output)
             if error:
                 logging.warning('Clusters in error state: %s' % error)
-
+            clusters_resume['state'] = state
+            clusters_resume['clusters_created'] = current_cluster_count
         time.sleep(delay)
     logging.info('Watcher exiting')
 
@@ -413,7 +414,8 @@ def main():
 
     # launch watcher thread to report status
     logging.info('Launching watcher thread')
-    watcher = threading.Thread(target=_watcher,args=(rosa_cmnd,cluster_name_seed,args.cluster_count,args.watcher_delay,my_uuid))
+    clusters_resume = {}
+    watcher = threading.Thread(target=_watcher,args=(rosa_cmnd,cluster_name_seed,args.cluster_count,args.watcher_delay,my_uuid,clusters_resume))
     watcher.daemon = True
     watcher.start()
 
@@ -473,11 +475,24 @@ def main():
     watcher.run = False
     watcher.join()
 
-    if args.cleanup_clusters is True:
-        _cleanup_clusters(rosa_cmnd,cluster_name_seed)
+    if args.cleanup_clusters:
+        cleanup = _cleanup_clusters(rosa_cmnd,cluster_name_seed)
+        logging.warning('Cleanup process failed') if cleanup != 0 else None
 
     if args.cleanup is True:
         shutil.rmtree(my_path)
+
+# Last, output test result
+    logging.info('************************************************************************')
+    logging.info('********* Resume for test %s *********' % (my_uuid))
+    logging.info('************************************************************************')
+    logging.info('Requested Clusters for test %s: %d' % (my_uuid,args.cluster_count))
+    logging.info('Created   Clusters for test %s: %d' % (my_uuid,clusters_resume['clusters_created']))
+    for i1 in clusters_resume['state'].items():
+        logging.info('              %s: %s' % (str(i1[0]),str(i1[1])))
+    logging.info('Batches size: %s' % (str(args.batch_size)))
+    logging.info('Delay between batches: %s' % (str(args.delay_between_batch)))
+    logging.info('Cluster Name Seed: %s' % (cluster_name_seed))
 
 
 if __name__ == '__main__':
