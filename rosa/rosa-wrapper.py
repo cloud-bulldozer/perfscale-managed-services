@@ -477,6 +477,7 @@ def main():
 
     if args.cleanup_clusters:
         cleanup = _cleanup_clusters(rosa_cmnd,cluster_name_seed)
+        logging.warning('Cleanup process failed') if cleanup != 0 else None
 
     if args.cleanup is True:
         shutil.rmtree(my_path)

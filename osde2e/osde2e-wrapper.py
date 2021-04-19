@@ -521,6 +521,7 @@ def main():
 
     if args.cleanup_clusters and not args.dry_run:
         cleanup = _cleanup_clusters(cmnd_path + "/osde2ectl",cluster_name_seed,my_path,account_config)
+        logging.warning('Cleanup process failed') if cleanup != 0 else None
 
     if args.cleanup is True:
         shutil.rmtree(my_path)
