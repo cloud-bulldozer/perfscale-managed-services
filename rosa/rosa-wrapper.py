@@ -476,15 +476,15 @@ def main():
     watcher.join()
 
     if args.cleanup_clusters:
-        cleanup = _cleanup_clusters(rosa_cmnd,cluster_name_seed)
-        logging.warning('Cleanup process failed') if cleanup != 0 else None
+        cleanup_result = _cleanup_clusters(rosa_cmnd,cluster_name_seed)
+        logging.warning('Cleanup process failed') if cleanup_result != 0 else None
 
-    if args.cleanup is True:
+    if args.cleanup:
         shutil.rmtree(my_path)
 
 # Last, output test result
     logging.info('************************************************************************')
-    logging.info('********* Resume for test %s *********' % (my_uuid))
+    logging.info('********* Summary for test %s *********' % (my_uuid))
     logging.info('************************************************************************')
     logging.info('Requested Clusters for test %s: %d' % (my_uuid,args.cluster_count))
     logging.info('Created   Clusters for test %s: %d' % (my_uuid,clusters_resume['clusters_created']))
