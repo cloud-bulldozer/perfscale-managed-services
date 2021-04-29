@@ -97,6 +97,47 @@ def _download_kubeconfig(osde2ectl_cmd,my_path):
         logging.error('Failed to load cluster-id from metadata.json file located on %s, kubeconfig file wont be downloaded' % my_path)
         return 0
 
+def _add_machinepool(osde2ectl_cmd,my_path):
+    try:
+        metadata = json.load(open(my_path + "/metadata.json"))
+    except Exception as err:
+        logging.error(err)
+        logging.error('Failed to load metadata.json file located %s, machinepool %s wont be created' % (my_path, args.machinepool_name))
+        return 1
+    if 'cluster-id' in metadata and metadata['cluster-id'] != "":
+        cluster_id = metadata['cluster-id']
+        logging.info('Checking if ocm tool is available on the system')
+        ocm_cmd = ["ocm", "-h"]
+        logging.debug(ocm_cmd)
+        ocm_process = subprocess.Popen(ocm_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        ocm_stdout,ocm_stderr = ocm_process.communicate()
+        if ocm_process.returncode != 0:
+            logging.error('%s unable to execute -h' % ocm_cmd)
+            logging.error(ocm_stderr.strip().decode("utf-8"))
+        else:
+            logging.info('Creating machinepool %s on %s' % (args.machinepool_name,cluster_id))
+            # ocm create machinepool --cluster=<your cluster ID> --labels="foo=bar,bar=baz" --replicas=3 --instance-type="m5.xlarge" mp-1
+            machinepool_cmd = ["ocm", "create", "machinepool",
+                               "--cluster", cluster_id,
+                               "--instance-type", args.machinepool_flavour,
+                               "--labels", args.machinepool_labels,
+                               "--taints", args.machinepool_taints,
+                               "--replicas", args.machinepool_replicas,
+                               args.machinepool_name]
+            logging.debug(machinepool_cmd)
+            machinepool_process = subprocess.Popen(machinepool_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            machinepool_stdout,machinepool_stderr = machinepool_process.communicate()
+            if machinepool_process.returncode != 0:
+                logging.error('Unable to create machinepool %s on %s' % (args.machinepool_name,cluster_id))
+                logging.error(machinepool_stdout.strip().decode("utf-8"))
+                logging.error(machinepool_stderr.strip().decode("utf-8"))
+            else:
+                logging.info('Created machinepool %s on %s. Waiting 5 minutes for hosts to come up' % (args.machinepool_name,cluster_id))
+                time.sleep(300)
+    else:
+        logging.error('Failed to load cluster-id from metadata.json file located on %s, machinepool %s wont be created' % (my_path, args.machinepool_name))
+        return 1
+
 def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,cluster_count,timestamp,dry_run,index_retry,skip_health_check,must_gather,es_ignored_metadata):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
@@ -150,6 +191,7 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
             logging.error(err)
             logging.error('Failed to write metadata.json file located %s' % cluster_path)
         _download_kubeconfig(osde2ectl_cmd, cluster_path)
+        _add_machinepool(osde2ectl_cmd,cluster_path) if args.machinepool_name else None
         if es is not None:
             metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
             common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
@@ -240,6 +282,7 @@ def main():
                                      parents=[parentParsers.esParser,
                                               parentParsers.runnerParser,
                                               parentParsers.clusterParser,
+                                              parentParsers.machinepoolParser,
                                               parentParsers.logParser])
     parser.add_argument(
         '--account-config',
@@ -270,6 +313,8 @@ def main():
         dest='osde2e_must_gather',
         help='Add a must-gather operation at the end of the osde2e test process',
         action='store_true')
+
+    global args
     args = parser.parse_args()
 
     if not args.es_index_only and not args.account_config:

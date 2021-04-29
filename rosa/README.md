@@ -74,6 +74,18 @@ without uploading any information**
 | --log-level | Level of logs to show. | INFO |
 | --only-delete-clusters | Delete clusters found on folder specified by **--path**.<br>**NOTE: It will fail if no cluster_name_seed file is found on folder | False |
 
+### Optional Machinepool variables
+
+A new machinepool can be created on each cluster after installation if `--machinepool-name` parameter is added. The rest of machinepool related parameters will have the default value if no specified.
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| --machinepool-name | Name of the machinepool to be created. | -- |
+| --machinepool-labels | Labels to add on the machinepool. | node-role.kubernetes.io/workload= |
+| --machinepool-taints | Taints to add on the machinepool. | role=workload:NoSchedule |
+| --machinepool-flavour | AWS flavour to use in the machinepool. | m5.xlarge |
+| --machinepool-replicas | Number of hosts to create on the machinepool. | 2 |
+
 ## AWS Configuration File
 
 Access to AWS is based on the common AWS cli configuration file, usually located on ~/.aws/config

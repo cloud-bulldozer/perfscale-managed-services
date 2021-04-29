@@ -97,6 +97,32 @@ clusterParser.add_argument(
     action='store_true',
     help="Just delete clusters found on folder specified by '--path' and exit")
 
+machinepoolParser = argparse.ArgumentParser(add_help=False)
+machinepoolParser.add_argument(
+    '--machinepool-name',
+    type=str,
+    help='Add a machinepool after cluster is installed')
+machinepoolParser.add_argument(
+    '--machinepool-labels',
+    type=str,
+    default='node-role.kubernetes.io/workload=',
+    help='Labels to add on the machinepool. Default: node-role.kubernetes.io/workload=')
+machinepoolParser.add_argument(
+    '--machinepool-taints',
+    type=str,
+    default='role=workload:NoSchedule',
+    help='Taints to add on the machinepool. Default: role=workload:NoSchedule')
+machinepoolParser.add_argument(
+    '--machinepool-flavour',
+    type=str,
+    default='m5.xlarge',
+    help='AWS flavour to use in the machinepool. Default: m5.xlarge')
+machinepoolParser.add_argument(
+    '--machinepool-replicas',
+    type=str,
+    default='2',
+    help='Number of hosts to create on the machinepool. Default: 2')
+
 logParser = argparse.ArgumentParser(add_help=False)
 logParser.add_argument(
     '--log-file',

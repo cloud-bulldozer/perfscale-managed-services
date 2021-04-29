@@ -64,7 +64,6 @@ def _verify_cmnd(rosa_cmnd,my_path):
 # No command to download kubeconfig using rosa CLI
 # https://issues.redhat.com/browse/SDA-3606
 # workarround using ocm cli
-# def _download_kubeconfig(osde2ectl_cmd,my_path):
 def _download_kubeconfig(cluster_id,my_path):
     logging.info('Checking if ocm tool is available on the system')
     ocm_cmd = ["ocm", "-h"]
@@ -104,6 +103,28 @@ def _install_addons(rosa_cmnd,cluster_id,addons):
             logging.error(addon_stdout.strip().decode("utf-8"))
             logging.error(addon_stderr.strip().decode("utf-8"))
         # TODO: control addon is installed with: rosa list addons -c <<cluster_name>>
+
+def _add_machinepool(rosa_cmnd,cluster_id):
+    logging.info('Creating machinepool %s on %s' % (args.machinepool_name,cluster_id))
+#  rosa create machinepool -c mycluster --name=mp-1 --replicas=2 --instance-type=r5.2xlarge --labels =foo=bar,bar=baz"
+    machinepool_cmd = [rosa_cmnd, "create", "machinepool",
+                       "--cluster", cluster_id,
+                       "--instance-type", args.machinepool_flavour,
+                       "--name", args.machinepool_name,
+                       "--labels", args.machinepool_labels,
+                       "--taints", args.machinepool_taints,
+                       "--replicas", args.machinepool_replicas,
+                       "-y"]
+    logging.debug(machinepool_cmd)
+    machinepool_process = subprocess.Popen(machinepool_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    machinepool_stdout,machinepool_stderr = machinepool_process.communicate()
+    if machinepool_process.returncode != 0:
+        logging.error('Unable to create machinepool %s on %s' % (args.machinepool_name,cluster_id))
+        logging.error(machinepool_stdout.strip().decode("utf-8"))
+        logging.error(machinepool_stderr.strip().decode("utf-8"))
+    else:
+        logging.info('Created machinepool %s on %s. Waiting 5 minutes for hosts to come up' % (args.machinepool_name,cluster_id))
+        time.sleep(300)
 
 def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,index,my_uuid,my_inc,timestamp,index_retry,addons,es_ignored_metadata,rosa_flavour):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -153,6 +174,7 @@ def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,in
         # https://issues.redhat.com/browse/SDA-3600
     else:
         _download_kubeconfig(metadata['cluster_id'], cluster_path)
+        _add_machinepool(rosa_cmnd,metadata['cluster_id']) if args.machinepool_name else None
         _install_addons(rosa_cmnd,metadata['cluster_id'], addons) if addons else None
     metadata["cluster_start_time"] = cluster_start_time
     metadata["cluster_end_time"] = cluster_end_time
@@ -240,6 +262,7 @@ def main():
                                      parents=[parentParsers.esParser,
                                               parentParsers.runnerParser,
                                               parentParsers.clusterParser,
+                                              parentParsers.machinepoolParser,
                                               parentParsers.logParser])
     parser.add_argument(
         '--rosa-cli',
@@ -274,6 +297,7 @@ def main():
         '--aws-profile',
         type=str,
         help='AWS profile to use if more than one are present on aws config file')
+    global args
     args = parser.parse_args()
 
     if not args.es_index_only and not args.rosa_token:
