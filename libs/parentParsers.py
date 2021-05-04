@@ -119,9 +119,19 @@ machinepoolParser.add_argument(
     help='AWS flavour to use in the machinepool. Default: m5.xlarge')
 machinepoolParser.add_argument(
     '--machinepool-replicas',
-    type=str,
-    default='2',
+    type=int,
+    default=2,
     help='Number of hosts to create on the machinepool. Default: 2')
+machinepoolParser.add_argument(
+    '--machinepool-wait',
+    dest='machinepool_wait',
+    action='store_true',
+    help='After creating the machinepool, wait until nodes to come up')
+machinepoolParser.add_argument(
+    '--machinepool-wait-cycles',
+    default=60,
+    type=int,
+    help='Number of 5 seconds wait cycles until halts the waiting')
 
 logParser = argparse.ArgumentParser(add_help=False)
 logParser.add_argument(

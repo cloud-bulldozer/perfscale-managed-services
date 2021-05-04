@@ -84,9 +84,11 @@ def _download_kubeconfig(cluster_id,my_path):
             logging.error(stdout)
             logging.error(stderr)
         else:
-            with open(my_path + "/kubeconfig", "w") as kubeconfig_file:
+            kubeconfig_path = my_path + "/kubeconfig"
+            with open(kubeconfig_path, "w") as kubeconfig_file:
                 kubeconfig_file.write(json.loads(stdout)['kubeconfig'])
-            logging.info('Downloaded kubeconfig file for cluster %s and stored at %s/kubeconfig' % (cluster_id, my_path))
+            logging.info('Downloaded kubeconfig file for cluster %s and stored at %s' % (cluster_id, kubeconfig_path))
+            return kubeconfig_path
 
 def _install_addons(rosa_cmnd,cluster_id,addons):
     addons_list = addons.split(",")
@@ -104,7 +106,7 @@ def _install_addons(rosa_cmnd,cluster_id,addons):
             logging.error(addon_stderr.strip().decode("utf-8"))
         # TODO: control addon is installed with: rosa list addons -c <<cluster_name>>
 
-def _add_machinepool(rosa_cmnd,cluster_id):
+def _add_machinepool(rosa_cmnd,kubeconfig,cluster_id):
     logging.info('Creating machinepool %s on %s' % (args.machinepool_name,cluster_id))
 #  rosa create machinepool -c mycluster --name=mp-1 --replicas=2 --instance-type=r5.2xlarge --labels =foo=bar,bar=baz"
     machinepool_cmd = [rosa_cmnd, "create", "machinepool",
@@ -113,7 +115,7 @@ def _add_machinepool(rosa_cmnd,cluster_id):
                        "--name", args.machinepool_name,
                        "--labels", args.machinepool_labels,
                        "--taints", args.machinepool_taints,
-                       "--replicas", args.machinepool_replicas,
+                       "--replicas", str(args.machinepool_replicas),
                        "-y"]
     logging.debug(machinepool_cmd)
     machinepool_process = subprocess.Popen(machinepool_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -122,9 +124,54 @@ def _add_machinepool(rosa_cmnd,cluster_id):
         logging.error('Unable to create machinepool %s on %s' % (args.machinepool_name,cluster_id))
         logging.error(machinepool_stdout.strip().decode("utf-8"))
         logging.error(machinepool_stderr.strip().decode("utf-8"))
+        return 1
     else:
-        logging.info('Created machinepool %s on %s. Waiting 5 minutes for hosts to come up' % (args.machinepool_name,cluster_id))
-        time.sleep(300)
+        if args.machinepool_wait:
+            logging.info('Created machinepool %s on %s. Waiting up to %d seconds for hosts to come up' % (args.machinepool_name,cluster_id,args.machinepool_wait_cycles*5))
+            logging.info('Checking if oc tool is available on the system')
+            oc_cmd = ["oc", "-h"]
+            logging.debug(oc_cmd)
+            oc_process = subprocess.Popen(oc_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            oc_stdout,oc_stderr = oc_process.communicate()
+            if oc_process.returncode != 0:
+                logging.error('%s unable to execute -h' % oc_cmd)
+                logging.error(oc_stdout.strip().decode("utf-8"))
+                logging.error(oc_stderr.strip().decode("utf-8"))
+                return 1
+            else:
+                kubeconfig_env = os.environ.copy()
+                kubeconfig_env["KUBECONFIG"] = kubeconfig
+                # 60 cicles, waiting 5 seconds at the end of each cicle, is about 300 seconds (5 minutes)
+                for counter in range(1,args.machinepool_wait_cycles):
+                    nodecheck_cmd = ["oc", "get", "nodes", "--no-headers=true",
+                                     "-l", args.machinepool_labels,
+                                     "-o", "custom-columns=NAME:metadata.name,STATUS:status.conditions[-1].type"]
+                    logging.debug(nodecheck_cmd)
+                    nodecheck_process = subprocess.Popen(nodecheck_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=kubeconfig_env)
+                    nodecheck_stdout,nodecheck_stderr = nodecheck_process.communicate()
+                    if nodecheck_process.returncode != 0:
+                        logging.error('Unable to oc get command, cannot check node status')
+                        logging.error(nodecheck_stdout.strip().decode("utf-8"))
+                        logging.error(nodecheck_stderr.strip().decode("utf-8"))
+                        return 1
+                    else:
+                        ready_nodes = 0
+                        for line in nodecheck_stdout.splitlines():
+                            ready_nodes += 1 if line.split()[1].decode() == "Ready" else None
+                        if ready_nodes >= args.machinepool_replicas:
+                            logging.info('Machinepool %s is created and ready nodes count (%d) meet expected (%d)' % (args.machinepool_name,ready_nodes,args.machinepool_replicas))
+                            logging.debug(nodecheck_stdout.strip().decode("utf-8"))
+                            logging.debug(nodecheck_stderr.strip().decode("utf-8"))
+                            break
+                        else:
+                            logging.debug('Ready nodes count: %d. Expected: %d' % (ready_nodes,args.machinepool_replicas))
+                            logging.debug('Waiting 5 seconds for next node check. (%d of %d)' % (counter,args.machinepool_wait_cycles))
+                            time.sleep(5)
+                else:
+                    logging.error('Machinepool %s is created but ready nodes count (%d) do not meet expected (%d)' % (args.machinepool_name,ready_nodes,args.machinepool_replicas))
+                    logging.error(nodecheck_stdout.strip().decode("utf-8"))
+                    logging.error(nodecheck_stderr.strip().decode("utf-8"))
+                    return 1
 
 def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,index,my_uuid,my_inc,timestamp,index_retry,addons,es_ignored_metadata,rosa_flavour):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -173,8 +220,8 @@ def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,in
         # rosa edit cluster -c 1iaaehmdd23lhifqk4fsjghrci82nt51 --expiration=72h
         # https://issues.redhat.com/browse/SDA-3600
     else:
-        _download_kubeconfig(metadata['cluster_id'], cluster_path)
-        _add_machinepool(rosa_cmnd,metadata['cluster_id']) if args.machinepool_name else None
+        kubeconfig_path = _download_kubeconfig(metadata['cluster_id'], cluster_path)
+        _add_machinepool(rosa_cmnd,kubeconfig_path,metadata['cluster_id']) if args.machinepool_name else None
         _install_addons(rosa_cmnd,metadata['cluster_id'], addons) if addons else None
     metadata["cluster_start_time"] = cluster_start_time
     metadata["cluster_end_time"] = cluster_end_time
@@ -511,9 +558,13 @@ def main():
     logging.info('********* Summary for test %s *********' % (my_uuid))
     logging.info('************************************************************************')
     logging.info('Requested Clusters for test %s: %d' % (my_uuid,args.cluster_count))
-    logging.info('Created   Clusters for test %s: %d' % (my_uuid,clusters_resume['clusters_created']))
-    for i1 in clusters_resume['state'].items():
-        logging.info('              %s: %s' % (str(i1[0]),str(i1[1])))
+    if 'clusters_created' in clusters_resume:
+        logging.info('Created   Clusters for test %s: %d' % (my_uuid,clusters_resume['clusters_created']))
+        if 'state' in clusters_resume:
+            for i1 in clusters_resume['state'].items():
+                logging.info('              %s: %s' % (str(i1[0]),str(i1[1])))
+    else:
+        logging.info('Created   Clusters for test %s: 0' % (my_uuid))
     logging.info('Batches size: %s' % (str(args.batch_size)))
     logging.info('Delay between batches: %s' % (str(args.delay_between_batch)))
     logging.info('Cluster Name Seed: %s' % (cluster_name_seed))

@@ -95,6 +95,8 @@ A new machinepool can be created on each cluster after installation if `--machin
 | --machinepool-taints | Taints to add on the machinepool. | role=workload:NoSchedule |
 | --machinepool-flavour | AWS flavour to use in the machinepool. | m5.xlarge |
 | --machinepool-replicas | Number of hosts to create on the machinepool. | 2 |
+| --machinepool-wait | Wait until number of ready nodes equals number of required replicas | False |
+| --machinepool-wait-cycles | Number of 5 seconds wait cycles until halts the waiting | 60 |
 
 ## Account Configuration File
 
