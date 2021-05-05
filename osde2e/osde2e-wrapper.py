@@ -72,20 +72,18 @@ def _verify_cmnd(osde2e_cmnd,my_path):
     logging.info('osde2e and osde2ectl commands validated with -h. Directory is %s' % osde2e_cmnd)
     return osde2e_cmnd
 
-def _download_kubeconfig(osde2ectl_cmd,my_path):
+def _download_kubeconfig(osde2ectl_cmd,cluster_name,my_path):
     logging.debug('Attempting to load metadata json')
     try:
         metadata = json.load(open(my_path + "/metadata.json"))
     except Exception as err:
         logging.error(err)
         logging.error('Failed to load metadata.json file located %s, kubeconfig file wont be downloaded' % my_path)
-        return 0
+        return 1
     if 'cluster-id' in metadata and metadata['cluster-id'] != "":
         cluster_id = metadata['cluster-id']
-        # required to create a new folder on kubeconfig_path until https://github.com/openshift/osde2e/issues/657 will be fixed
-        kubeconfig_path = my_path + "/" + cluster_id
-        logging.info('Downloading kubeconfig file for cluster %s on %s' % (cluster_id,kubeconfig_path))
-        cmd = [osde2ectl_cmd, "--custom-config", "cluster_account.yaml", "get", "-k", "-i", cluster_id, "--kube-config-path", kubeconfig_path]
+        logging.info('Downloading kubeconfig file for cluster %s on %s' % (cluster_id,my_path))
+        cmd = [osde2ectl_cmd, "--custom-config", "cluster_account.yaml", "get", "-k", "-i", cluster_id, "--kube-config-path", my_path]
         logging.debug(cmd)
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
         stdout,stderr = process.communicate()
@@ -93,9 +91,100 @@ def _download_kubeconfig(osde2ectl_cmd,my_path):
             logging.error('Failed to download kubeconfig file for cluster id %s with this stdout/stderr:' % cluster_id)
             logging.error(stdout)
             logging.error(stderr)
+        else:
+            logging.info('Downloaded kubeconfig file for cluster %s and stored at %s/%s-kubeconfig.txt' % (cluster_id, my_path,cluster_name))
+            kubeconfig_file = my_path + "/" + cluster_name + "-" + "kubeconfig.txt"
+            return kubeconfig_file
     else:
         logging.error('Failed to load cluster-id from metadata.json file located on %s, kubeconfig file wont be downloaded' % my_path)
-        return 0
+        return 1
+
+def _add_machinepool(osde2ectl_cmd,kubeconfig,my_path):
+    try:
+        metadata = json.load(open(my_path + "/metadata.json"))
+    except Exception as err:
+        logging.error(err)
+        logging.error('Failed to load metadata.json file located %s, machinepool %s wont be created' % (my_path, args.machinepool_name))
+        return 1
+    if 'cluster-id' in metadata and metadata['cluster-id'] != "":
+        cluster_id = metadata['cluster-id']
+        logging.info('Checking if ocm tool is available on the system')
+        ocm_cmd = ["ocm", "-h"]
+        logging.debug(ocm_cmd)
+        ocm_process = subprocess.Popen(ocm_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        ocm_stdout,ocm_stderr = ocm_process.communicate()
+        if ocm_process.returncode != 0:
+            logging.error('%s unable to execute -h' % ocm_cmd)
+            logging.error(ocm_stderr.strip().decode("utf-8"))
+            return 1
+        else:
+            logging.info('Creating machinepool %s on %s' % (args.machinepool_name,cluster_id))
+            # ocm create machinepool --cluster=<your cluster ID> --labels="foo=bar,bar=baz" --replicas=3 --instance-type="m5.xlarge" mp-1
+            machinepool_cmd = ["ocm", "create", "machinepool",
+                               "--cluster", cluster_id,
+                               "--instance-type", args.machinepool_flavour,
+                               "--labels", args.machinepool_labels,
+                               "--taints", args.machinepool_taints,
+                               "--replicas", str(args.machinepool_replicas),
+                               args.machinepool_name]
+            logging.debug(machinepool_cmd)
+            machinepool_process = subprocess.Popen(machinepool_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            machinepool_stdout,machinepool_stderr = machinepool_process.communicate()
+            if machinepool_process.returncode != 0:
+                logging.error('Unable to create machinepool %s on %s' % (args.machinepool_name,cluster_id))
+                logging.error(machinepool_stdout.strip().decode("utf-8"))
+                logging.error(machinepool_stderr.strip().decode("utf-8"))
+                return 1
+            else:
+                if args.machinepool_wait:
+                    logging.info('Created machinepool %s on %s. Waiting up to %d seconds for hosts to come up' % (args.machinepool_name,cluster_id,args.machinepool_wait_cycles*5))
+                    logging.info('Checking if oc tool is available on the system')
+                    oc_cmd = ["oc", "-h"]
+                    logging.debug(oc_cmd)
+                    oc_process = subprocess.Popen(oc_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    oc_stdout,oc_stderr = oc_process.communicate()
+                    if oc_process.returncode != 0:
+                        logging.error('%s unable to execute -h' % oc_cmd)
+                        logging.error(oc_stdout.strip().decode("utf-8"))
+                        logging.error(oc_stderr.strip().decode("utf-8"))
+                        return 1
+                    else:
+                        kubeconfig_env = os.environ.copy()
+                        kubeconfig_env["KUBECONFIG"] = kubeconfig
+                        # 60 cicles, waiting 5 seconds at the end of each cicle, is about 300 seconds (5 minutes)
+                        for counter in range(1,args.machinepool_wait_cycles):
+                            nodecheck_cmd = ["oc", "get", "nodes", "--no-headers=true",
+                                             "-l", args.machinepool_labels,
+                                             "-o", "custom-columns=NAME:metadata.name,STATUS:status.conditions[-1].type"]
+                            logging.debug(nodecheck_cmd)
+                            nodecheck_process = subprocess.Popen(nodecheck_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=kubeconfig_env)
+                            nodecheck_stdout,nodecheck_stderr = nodecheck_process.communicate()
+                            if nodecheck_process.returncode != 0:
+                                logging.error('Unable to execute oc get command, cannot check node status')
+                                logging.error(nodecheck_stdout.strip().decode("utf-8"))
+                                logging.error(nodecheck_stderr.strip().decode("utf-8"))
+                                return 1
+                            else:
+                                ready_nodes = 0
+                                for line in nodecheck_stdout.splitlines():
+                                    ready_nodes += 1 if line.split()[1].decode() == "Ready" else None
+                                if ready_nodes >= args.machinepool_replicas:
+                                    logging.info('Machinepool %s is created and ready nodes count (%d) meet expected (%d)' % (args.machinepool_name,ready_nodes,args.machinepool_replicas))
+                                    logging.debug(nodecheck_stdout.strip().decode("utf-8"))
+                                    logging.debug(nodecheck_stderr.strip().decode("utf-8"))
+                                    break
+                                else:
+                                    logging.debug('Ready nodes count: %d. Expected: %d' % (ready_nodes,args.machinepool_replicas))
+                                    logging.debug('Waiting 5 seconds for next node check. (%d of %d)' % (counter,args.machinepool_wait_cycles))
+                                    time.sleep(5)
+                        else:
+                            logging.error('Machinepool %s is created but ready nodes count (%d) do not meet expected (%d)' % (args.machinepool_name,ready_nodes,args.machinepool_replicas))
+                            logging.error(nodecheck_stdout.strip().decode("utf-8"))
+                            logging.error(nodecheck_stderr.strip().decode("utf-8"))
+                            return 1
+    else:
+        logging.error('Failed to load cluster-id from metadata.json file located on %s, machinepool %s wont be created' % (my_path, args.machinepool_name))
+        return 1
 
 def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,cluster_count,timestamp,dry_run,index_retry,skip_health_check,must_gather,es_ignored_metadata):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -149,7 +238,8 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
         except Exception as err:
             logging.error(err)
             logging.error('Failed to write metadata.json file located %s' % cluster_path)
-        _download_kubeconfig(osde2ectl_cmd, cluster_path)
+        kubeconfig_path = _download_kubeconfig(osde2ectl_cmd, account_config['cluster']['name'], cluster_path)
+        _add_machinepool(osde2ectl_cmd,kubeconfig_path,cluster_path) if args.machinepool_name else None
         if es is not None:
             metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
             common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
@@ -240,6 +330,7 @@ def main():
                                      parents=[parentParsers.esParser,
                                               parentParsers.runnerParser,
                                               parentParsers.clusterParser,
+                                              parentParsers.machinepoolParser,
                                               parentParsers.logParser])
     parser.add_argument(
         '--account-config',
@@ -270,6 +361,8 @@ def main():
         dest='osde2e_must_gather',
         help='Add a must-gather operation at the end of the osde2e test process',
         action='store_true')
+
+    global args
     args = parser.parse_args()
 
     if not args.es_index_only and not args.account_config:
@@ -485,7 +578,7 @@ def main():
                 create_cluster = True
 
             if create_cluster:
-                if "cluster" not in my_cluster_config.keys():
+                if "cluster" not in my_cluster_config.keys() or my_cluster_config['cluster'] is None:
                     my_cluster_config['cluster'] = {}
                 my_cluster_config['cluster']['name'] = cluster_name_seed + "-" + str(loop_counter).zfill(4)
                 logging.debug('Starting Cluster thread %d for cluster %s' % (loop_counter + 1,my_cluster_config['cluster']['name']))
@@ -532,9 +625,13 @@ def main():
         logging.info('********* Summary for test %s *********' % (my_uuid))
         logging.info('************************************************************************')
         logging.info('Requested Clusters for test %s: %d' % (my_uuid,args.cluster_count))
-        logging.info('Created   Clusters for test %s: %d' % (my_uuid,account_config['clusters_created']))
-        for i1 in account_config['state'].items():
-            logging.info('              %s: %s' % (str(i1[0]),str(i1[1])))
+        if 'clusters_created' in account_config:
+            logging.info('Created   Clusters for test %s: %d' % (my_uuid,account_config['clusters_created']))
+            if 'state' in account_config:
+                for i1 in account_config['state'].items():
+                    logging.info('              %s: %s' % (str(i1[0]),str(i1[1])))
+        else:
+            logging.info('Created   Clusters for test %s: 0' % (my_uuid))
         logging.info('Batches size: %s' % (str(args.batch_size)))
         logging.info('Delay between batches: %s' % (str(args.delay_between_batch)))
         logging.info('Cluster Name Seed: %s' % (cluster_name_seed))

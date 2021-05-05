@@ -84,6 +84,20 @@ without uploading any information**
 | --osde2e-must-gather | Enable gathering facts after cluster installation | False |
 | --only-delete-clusters | Delete clusters found on folder specified by **--path**.<br>**NOTE: It will fail if no cluster_name_seed file is found on folder | False |
 
+### Optional Machinepool variables
+
+A new machinepool can be created on each cluster after installation if `--machinepool-name` parameter is added. The rest of machinepool related parameters will have the default value if no specified.
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| --machinepool-name | Name of the machinepool to be created. | -- |
+| --machinepool-labels | Labels to add on the machinepool. | node-role.kubernetes.io/workload= |
+| --machinepool-taints | Taints to add on the machinepool. | role=workload:NoSchedule |
+| --machinepool-flavour | AWS flavour to use in the machinepool. | m5.xlarge |
+| --machinepool-replicas | Number of hosts to create on the machinepool. | 2 |
+| --machinepool-wait | Wait until number of ready nodes equals number of required replicas | False |
+| --machinepool-wait-cycles | Number of 5 seconds wait cycles until halts the waiting | 60 |
+
 ## Account Configuration File
 
 The account configuration file is a yaml formated file that provides vital information for communication with
