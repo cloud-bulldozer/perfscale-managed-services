@@ -189,6 +189,12 @@ def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,in
         cluster_cmd.append('--multi-az')
     if rosa_flavour:
         cluster_cmd.append('--flavour=' + rosa_flavour)
+    if args.rosa_version:
+        cluster_cmd.append('--version')
+        cluster_cmd.append(args.rosa_version)
+    if args.wildcard_options:
+        for param in args.wildcard_options.split():
+            cluster_cmd.append(param)
     logging.debug(cluster_cmd)
     installation_log = open(cluster_path + "/" + 'installation.log', 'w')
     process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log)
@@ -340,6 +346,10 @@ def main():
         '--rosa-flavour',
         type=str,
         help='AWS Flavor to use for infra nodes')
+    parser.add_argument(
+        '--rosa-version',
+        type=str,
+        help='OCP version used to install the cluster')
     parser.add_argument(
         '--aws-profile',
         type=str,

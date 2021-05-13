@@ -208,6 +208,9 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
     cluster_cmd = [osde2e_cmnd, "test","--custom-config", "cluster_account.yaml"]
     cluster_cmd.append('--skip-health-check') if skip_health_check else None
     cluster_cmd.append('--must-gather=false') if not must_gather else None
+    if args.wildcard_options:
+        for param in args.wildcard_options.split():
+            cluster_cmd.append(param)
     if not dry_run:
         logging.debug(cluster_cmd)
         installation_log = open(cluster_path + "/" + 'installation.log', 'w')

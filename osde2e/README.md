@@ -83,6 +83,7 @@ without uploading any information**
 | --skip-health-check | Do not run Health Checks after cluster is installed by osde2e | False |
 | --osde2e-must-gather | Enable gathering facts after cluster installation | False |
 | --only-delete-clusters | Delete clusters found on folder specified by **--path**.<br>**NOTE: It will fail if no cluster_name_seed file is found on folder | False |
+| --wildcard-options | [Any other option to be passed to the osde2e binary](#wildcard-variable) | -- |
 
 ### Optional Machinepool variables
 
@@ -97,6 +98,18 @@ A new machinepool can be created on each cluster after installation if `--machin
 | --machinepool-replicas | Number of hosts to create on the machinepool. | 2 |
 | --machinepool-wait | Wait until number of ready nodes equals number of required replicas | False |
 | --machinepool-wait-cycles | Number of 5 seconds wait cycles until halts the waiting | 60 |
+
+### Wildcard variable
+
+The osde2e tool is accepting more and more parameters with every new version, using `--wildcard-options` will transfer the followed string directly to the `osde2e test` execution.
+
+For example:
+
+`osde2e-wrapper.py --cluster-name-seed mrnd --cluster-count 1 --wildcard-options "--secret-locations /tmp"`
+
+Will execute:
+
+`osde2e test --secret-locations /tmp`
 
 ## Account Configuration File
 

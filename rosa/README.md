@@ -63,6 +63,7 @@ without uploading any information**
 | --rosa-multi-az | Install ROSA clusters with multi-az support, deploying on multiple datacenters | False |
 | --rosa-addons | Comma separated list of addons to be added after cluster installation | -- |
 | --rosa-flavour | AWS Flavour to be use on the infra nodes | -- |
+| --rosa-version | OCP version used to install the cluster | -- |
 | --aws-profile | AWS profile to use if there is more than one on AWS cli configuration file | -- |
 | --cluster-count | Total number of clusters to create. | 1 |
 | --batch-size | Number of clusters to create in a batch. If not set it will try and create them all at once. <br>**NOTE**: If not used in conjunction with --delay-between-batch the cluster creation will block at the set batch size until one completes then continue. I.e. if 3 clusters are requested with a batch size of 2. The first two will be requested and then it will block until one of those completes to request the third. | -- |
@@ -73,6 +74,7 @@ without uploading any information**
 | --log-file | File where to write logs. | -- |
 | --log-level | Level of logs to show. | INFO |
 | --only-delete-clusters | Delete clusters found on folder specified by **--path**.<br>**NOTE: It will fail if no cluster_name_seed file is found on folder | False |
+| --wildcard-options | [Any other option to be passed to the rosa binary](#wildcard-variable) | -- |
 
 ### Optional Machinepool variables
 
@@ -87,6 +89,18 @@ A new machinepool can be created on each cluster after installation if `--machin
 | --machinepool-replicas | Number of hosts to create on the machinepool. | 2 |
 | --machinepool-wait | Wait until number of ready nodes equals number of required replicas | False |
 | --machinepool-wait-cycles | Number of 5 seconds wait cycles until halts the waiting | 60 |
+
+### Wildcard variable
+
+The rosa tool is accepting more and more parameters with every new version, using `--wildcard-options` will transfer the followed string directly to the `rosa create cluster` execution.
+
+For example:
+
+`rosa-wrapper.py --cluster-name-seed mrnd --cluster-count 1 --wildcard-options "--region us-west-2"`
+
+Will execute:
+
+`rosa create cluster --region us-west-2`
 
 ## AWS Configuration File
 
