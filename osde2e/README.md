@@ -73,7 +73,7 @@ without uploading any information**
 | --batch-size | Number of clusters to create in a batch. If not set it will try and create them all at once. <br>**NOTE**: If not used in conjunction with --delay-between-batch the cluster creation will block at the set batch size until one completes then continue. I.e. if 3 clusters are requested with a batch size of 2. The first two will be requested and then it will block until one of those completes to request the third. | -- |
 | --delay-between-batch | If set, we will wait X seconds between each batch request | -- |
 | --watcher-delay | Delay between each status check in seconds. | 60 |
-| --expire | Minutes until cluster expires and it is deleted by OSD. It sets CLUSTER_EXPIRY_IN_MINUTES var for osde2e | -- |
+| --expire | Minutes until cluster expires and it is automatically deleted. It sets CLUSTER_EXPIRY_IN_MINUTES var for osde2e | -- |
 | --cleanup-clusters | Cleanup any non-error state clusters upon test completion. | False |
 | --user-override | User to set as the owner. <br>**NOTE: this takes precidence over what is provided in the account-config file** | -- |
 | --aws-account-file | AWS account file that provides account,accessKey,secretKey. This file will be looped over as needed to achieve all clusters requested. Example format: <br> ```0009808111,AAAA53YREVPCS111,00019ILbzo+yWU9C5FG5YrnoZC5eBg2111```<br>```0007006111,AAAAUZRL736SW6111,000P/b94AL+LSCzJBWbZCYRuYArF9Zr111```<br>Having AWS_PROFILE variable set will choose which profile to use. | -- |

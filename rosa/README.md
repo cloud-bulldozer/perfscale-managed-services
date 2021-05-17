@@ -68,7 +68,7 @@ without uploading any information**
 | --batch-size | Number of clusters to create in a batch. If not set it will try and create them all at once. <br>**NOTE**: If not used in conjunction with --delay-between-batch the cluster creation will block at the set batch size until one completes then continue. I.e. if 3 clusters are requested with a batch size of 2. The first two will be requested and then it will block until one of those completes to request the third. | -- |
 | --delay-between-batch | If set, we will wait X seconds between each batch request | -- |
 | --watcher-delay | Delay between each status check in seconds. | 60 |
-| --expire | Minutes until cluster expires and it is deleted by OSD. It sets CLUSTER_EXPIRY_IN_MINUTES var for osde2e | -- |
+| --expire | Minutes until cluster expires and it is automatically deleted. | -- |
 | --cleanup-clusters | Cleanup any non-error state clusters upon test completion. | False |
 | --log-file | File where to write logs. | -- |
 | --log-level | Level of logs to show. | INFO |

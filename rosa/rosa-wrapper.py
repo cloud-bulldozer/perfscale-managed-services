@@ -28,7 +28,7 @@ from libs import parentParsers
 
 # If rosa command path is provided verify we can run the help function
 # If it is not provided, dowload binary from the latest tag
-def _verify_cmnd(rosa_cmnd,my_path):
+def _verify_cmnd(rosa_cmnd, my_path):
     # If the command path was not given, download latest binary from github
     if rosa_cmnd is None:
         logging.info('rosa command not provided')
@@ -64,7 +64,7 @@ def _verify_cmnd(rosa_cmnd,my_path):
 # No command to download kubeconfig using rosa CLI
 # https://issues.redhat.com/browse/SDA-3606
 # workarround using ocm cli
-def _download_kubeconfig(cluster_id,my_path):
+def _download_kubeconfig(cluster_id, my_path):
     logging.info('Checking if ocm tool is available on the system')
     ocm_cmd = ["ocm", "-h"]
     logging.debug(ocm_cmd)
@@ -90,7 +90,7 @@ def _download_kubeconfig(cluster_id,my_path):
             logging.info('Downloaded kubeconfig file for cluster %s and stored at %s' % (cluster_id, kubeconfig_path))
             return kubeconfig_path
 
-def _install_addons(rosa_cmnd,cluster_id,addons):
+def _install_addons(rosa_cmnd, cluster_id, addons):
     addons_list = addons.split(",")
     for addon in addons_list:
         logging.info('Installing %s addon on %s' % (addon,cluster_id))
@@ -106,7 +106,25 @@ def _install_addons(rosa_cmnd,cluster_id,addons):
             logging.error(addon_stderr.strip().decode("utf-8"))
         # TODO: control addon is installed with: rosa list addons -c <<cluster_name>>
 
-def _add_machinepool(rosa_cmnd,kubeconfig,cluster_id):
+def _extend_cluster_expiration(rosa_cmnd, cluster_id, expiration):
+    logging.info('Extending cluster expiration for %d minutes on %s' % (expiration,cluster_id))
+    # rosa edit cluster -c 1iaaehmdd23lhifqk4fsjghrci82nt51 --expiration=3600m
+    expiration_cmd = [rosa_cmnd, "edit", "cluster",
+                      "--cluster", cluster_id,
+                      "--expiration", str(expiration)+'m']
+    logging.debug(expiration_cmd)
+    expiration_process = subprocess.Popen(expiration_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    expiration_stdout,expiration_stderr = expiration_process.communicate()
+    if expiration_process.returncode != 0:
+        logging.error('Unable to extend expiration on %s' % cluster_id)
+        logging.error(expiration_stdout.strip().decode("utf-8"))
+        logging.error(expiration_stderr.strip().decode("utf-8"))
+        return 1
+    else:
+        expiration_time = time.strftime("%Y-%m-%d %H:%M:%S %Z",time.gmtime(time.time() + expiration*60))
+        logging.info('Cluster %s will be removed in %d minutes, at %s' % (cluster_id,expiration,expiration_time))
+
+def _add_machinepool(rosa_cmnd, kubeconfig, cluster_id):
     logging.info('Creating machinepool %s on %s' % (args.machinepool_name,cluster_id))
 #  rosa create machinepool -c mycluster --name=mp-1 --replicas=2 --instance-type=r5.2xlarge --labels =foo=bar,bar=baz"
     machinepool_cmd = [rosa_cmnd, "create", "machinepool",
@@ -173,7 +191,7 @@ def _add_machinepool(rosa_cmnd,kubeconfig,cluster_id):
                     logging.error(nodecheck_stderr.strip().decode("utf-8"))
                     return 1
 
-def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,index,my_uuid,my_inc,timestamp,index_retry,addons,es_ignored_metadata,rosa_flavour):
+def _build_cluster(rosa_cmnd, cluster_name_seed, expiration, rosa_azs, my_path, es, index, my_uuid, my_inc, timestamp, index_retry, addons, es_ignored_metadata, rosa_flavour):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
     metadata = {}
@@ -213,16 +231,12 @@ def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,in
         with open(cluster_path + "/" + 'installation.log',"r") as output_file:
             logging.error(output_file.read())
         success = False
-        # Only extending expiration on failed clusters, because ready one will be deleted at the end of the script
-        # if expiration:
-        #     logging.info('Extending cluster expiration on %d minutes' % expiration)
-        # rosa edit cluster -c 1iaaehmdd23lhifqk4fsjghrci82nt51 --expiration-time=2021-01-22T03:05:42.44677Z
-        # rosa edit cluster -c 1iaaehmdd23lhifqk4fsjghrci82nt51 --expiration=72h
-        # https://issues.redhat.com/browse/SDA-3600
     else:
         kubeconfig_path = _download_kubeconfig(metadata['cluster_id'], cluster_path)
         _add_machinepool(rosa_cmnd,kubeconfig_path,metadata['cluster_id']) if args.machinepool_name else None
         _install_addons(rosa_cmnd,metadata['cluster_id'], addons) if addons else None
+    # extending cluster expiration on all clusters
+    _extend_cluster_expiration(rosa_cmnd,metadata['cluster_id'], expiration) if expiration else None
     metadata["cluster_start_time"] = cluster_start_time
     metadata["cluster_end_time"] = cluster_end_time
     metadata["install_successful"] = success
@@ -238,7 +252,7 @@ def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,in
         metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
 
-def _watcher(rosa_cmnd,cluster_name_seed,cluster_count,delay,my_uuid,clusters_resume):
+def _watcher(rosa_cmnd, cluster_name_seed, cluster_count, delay, my_uuid, clusters_resume):
     time.sleep(30)
     logging.info('Watcher thread started')
     logging.info('Getting status every %d seconds' % int(delay))
@@ -275,7 +289,7 @@ def _watcher(rosa_cmnd,cluster_name_seed,cluster_count,delay,my_uuid,clusters_re
         time.sleep(delay)
     logging.info('Watcher exiting')
 
-def _cleanup_clusters(rosa_cmnd,cluster_name_seed):
+def _cleanup_clusters(rosa_cmnd, cluster_name_seed):
     exit_status = 0
     logging.info('Starting cluster cleanup for %s' % cluster_name_seed)
     cmd = [rosa_cmnd, "list", "clusters"]
