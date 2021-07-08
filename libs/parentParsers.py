@@ -96,6 +96,11 @@ clusterParser.add_argument(
     dest='only_delete_clusters',
     action='store_true',
     help="Just delete clusters found on folder specified by '--path' and exit")
+clusterParser.add_argument(
+    '--wildcard-options',
+    type=str,
+    help="Between quotes, any other parameter to be transfered to the binary without any validation")
+
 
 machinepoolParser = argparse.ArgumentParser(add_help=False)
 machinepoolParser.add_argument(
