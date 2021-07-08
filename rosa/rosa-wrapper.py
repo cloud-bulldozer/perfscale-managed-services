@@ -187,6 +187,7 @@ def _build_cluster(rosa_cmnd,cluster_name_seed,expiration,rosa_azs,my_path,es,in
     cluster_cmd = [rosa_cmnd, "create","cluster", "--cluster-name", cluster_name, "-y", "--watch"]
     if rosa_azs:
         cluster_cmd.append('--multi-az')
+        metadata["multiAZ"] = 'True'
     if rosa_flavour:
         cluster_cmd.append('--flavour=' + rosa_flavour)
     if args.rosa_version:

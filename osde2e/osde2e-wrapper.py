@@ -234,6 +234,7 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
         metadata["install_successful"] = success
         metadata["uuid"] = my_uuid
         metadata['cluster_name'] = account_config['cluster']['name']
+        metadata['multiAZ'] = 'True' if account_config['cluster']['multiAZ'] else None
         metadata["install_counter"] = my_inc
         try:
             with open(cluster_path + "/metadata.json", "w") as metadata_file:
