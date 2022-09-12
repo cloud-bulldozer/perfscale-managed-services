@@ -196,7 +196,7 @@ def get_metadata(kubeconfig,my_path,duration,cluster_name,uuid,operation):
 
 def _watcher(kubeconfig_location, cluster_name_seed, cluster_count, delay, my_uuid, clusters_resume):
     os.environ["KUBECONFIG"] = kubeconfig_location
-    time.sleep(30)
+    time.sleep(60)
     logging.info('Watcher thread started')
     logging.info('Getting status every %d seconds' % int(delay))
     my_thread = threading.current_thread()
@@ -213,12 +213,13 @@ def _watcher(kubeconfig_location, cluster_name_seed, cluster_count, delay, my_uu
         # Count the various states/status' and report it to logging
         for line in stdout.splitlines():
             if cluster_name_seed in line:
-                current_cluster_count += 1
-                state_key = line.split()[3] if 'Completed' in line else line.split()[2]
-                state[state_key] = state.get(state_key, 0) + 1
-                # Not sure about the error state key
-                if state_key == "error":
-                    error.append(line.split()[0])
+                if len(line.split()) >= 3:
+                    current_cluster_count += 1
+                    state_key = line.split()[3] if 'Completed' in line else line.split()[2]
+                    state[state_key] = state.get(state_key, 0) + 1
+                    # Not sure about the error state key
+                    if state_key == "error":
+                        error.append(line.split()[0])
 
         logging.info('Requested Clusters for test %s: %d' % (my_uuid,cluster_count))
         if current_cluster_count != 0:
