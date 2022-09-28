@@ -13,44 +13,62 @@
 
 import argparse
 import time
+import datetime
 import subprocess
 import sys
 import shutil
 import os
 import uuid
 import json
+import base64
+import random
+import re
 import requests
 import urllib
 import logging
 import configparser
-from distutils import version
+from distutils import version as ver
 import threading
 from git import Repo
 from libs import common
 from libs import parentParsers
 
-def _verify_cmnds(ocm_cmnd, hypershift_cmnd, my_path):
+def _verify_cmnds(ocm_cmnd, hypershift_cmnd, my_path, ocm_version, hypershift_version):
     # If the command path was not given, download latest binary from github
     if ocm_cmnd is None:
         logging.info('ocm command not provided')
-        logging.info('Downloading latest binary ocm from https://github.com/openshift-online/ocm-cli/releases/')
+        logging.info('Downloading binary ocm from https://github.com/openshift-online/ocm-cli/releases/')
         tags_list = []
         try:
             tags = requests.get(url='https://api.github.com/repos/openshift-online/ocm-cli/git/refs/tags')
         except (requests.ConnectionError,urllib.error.HTTPError) as err:
             logging.error('Cannot download tags list from https://api.github.com/repos/openshift-online/ocm-cli/git/refs/tags')
             logging.error(err)
-            return 1
-        # Get all tags, sort and use the last one
+            exit(1)
+        # Get all tags, sort and select the correct one
         for tag in tags.json():
             tags_list.append(tag['ref'].split('/')[-1].split('v')[-1])
-        last_version = sorted(tags_list,key=version.StrictVersion)[-1]
-        logging.info('Identified latest release as %s' % last_version)
-        url = 'https://github.com/openshift-online/ocm-cli/releases/download/v' + last_version + '/ocm-linux-amd64'
-        with urllib.request.urlopen(url) as response, open(my_path + '/ocm', 'wb') as out_file:
-            shutil.copyfileobj(response, out_file)
-        os.chmod(my_path + '/ocm', 0o777)
-        ocm_cmnd = my_path + "/ocm"
+        logging.debug('List of tags: %s' % tags_list)
+        if ocm_version == 'latest':
+            version = sorted(tags_list,key=ver.StrictVersion)[-1]
+        else:
+            version = None
+            for tag in tags_list:
+                if tag == ocm_version:
+                    version = tag
+            if version is None:
+                version = sorted(tags_list,key=ver.StrictVersion)[-1]
+                logging.error('Invalid OCM release %s, downloading latest release identified as %s' % (ocm_version, version))
+        logging.info('Downloading release identified as %s' % version)
+        try:
+            url = 'https://github.com/openshift-online/ocm-cli/releases/download/v' + version + '/ocm-linux-amd64'
+            with urllib.request.urlopen(url) as response, open(my_path + '/ocm', 'wb') as out_file:
+                shutil.copyfileobj(response, out_file)
+            os.chmod(my_path + '/ocm', 0o777)
+            ocm_cmnd = my_path + "/ocm"
+        except urllib.error.HTTPError as err:
+            logging.error('Failed to download valid version %s from GitHub: %s' % (version, err))
+            exit(1)
     logging.info('Testing ocm command with: ocm -h')
     ocm_cmd = [ocm_cmnd, "-h"]
     ocm_process = subprocess.Popen(ocm_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -62,8 +80,8 @@ def _verify_cmnds(ocm_cmnd, hypershift_cmnd, my_path):
     logging.info('ocm command validated with -h. Directory is %s' % my_path)
     if hypershift_cmnd is None:
         logging.info('hypershift command not provided')
-        logging.info('Cloning hypershift repo and compiling cli from https://github.com/openshift/hypershift/')
-        Repo.clone_from("https://github.com/openshift/hypershift.git", my_path + '/hypershift')
+        logging.info('Cloning hypershift repo and compiling cli from https://github.com/openshift/hypershift/ using %s branch' % hypershift_version)
+        Repo.clone_from("https://github.com/openshift/hypershift.git", my_path + '/hypershift', branch=hypershift_version)
         os.chdir(my_path + '/hypershift')
         logging.info('Compiling hypershift cli on %s' % my_path + '/hypershift')
         make_cmd = ["make", "build"]
@@ -87,7 +105,7 @@ def _verify_cmnds(ocm_cmnd, hypershift_cmnd, my_path):
     logging.info('hypershift command validated with -h. Directory is %s' % my_path)
     return (ocm_cmnd, hypershift_cmnd)
 
-def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster,es,index,index_retry,uuid,hostedclusters,hosted_workers):
+def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster,es,index,index_retry,uuid,hostedclusters):
     logging.info('Getting Management Cluster Information from %s' % mgmt_cluster)
     ocm_command = [ocm_cmnd, "get", "/api/clusters_mgmt/v1/clusters"]
     ocm_process = subprocess.Popen(ocm_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -109,11 +127,12 @@ def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster,es,index,index_retry,uuid,host
                 metadata['workers'] = cluster['nodes']['compute']
                 metadata['workers_type'] = cluster['nodes']['compute_machine_type']['id']
                 metadata['network_type'] = cluster['network']['type']
-                metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                # metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
                 metadata['hostedclusters'] = hostedclusters
-                metadata['workers_per_nodepool'] = hosted_workers
                 es_ignored_metadata = ""
-                common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
+                if es is not None:
+                    common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
                 return metadata
 
 
@@ -135,7 +154,7 @@ def _download_kubeconfig(ocm_cmnd,mgmt_cluster_id,my_path):
         return kubeconfig_path
 
 
-def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt_cluster_base_domain, worker_nodes, mgmt_cluster_aws_zone, pull_secret_file, my_path, my_uuid, my_inc, es, index, index_retry, mgmt_cluster_name):
+def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt_cluster_base_domain, cluster_load, job_iterations, worker_nodes, mgmt_cluster_aws_zone, pull_secret_file, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_cluster_name):
     os.environ["KUBECONFIG"] = kubeconfig_location
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
@@ -143,7 +162,7 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
     logging.debug('Attempting cluster installation')
     logging.debug('Output directory set to %s' % cluster_path)
     cluster_name = cluster_name_seed + "-" + str(my_inc).zfill(4)
-    cluster_cmd = [hypershift_cmnd, "create","cluster", "aws", "--name", cluster_name, "--base-domain", mgmt_cluster_base_domain, "--additional-tags", "mgmt-cluster=" + mgmt_cluster_name, "--aws-creds", my_path + '/aws_creds', "--pull-secret", pull_secret_file, "--region", mgmt_cluster_aws_zone, "--node-pool-replicas", worker_nodes, '--wait']
+    cluster_cmd = [hypershift_cmnd, "create","cluster", "aws", "--name", cluster_name, "--base-domain", mgmt_cluster_base_domain, "--additional-tags", "mgmt-cluster=" + mgmt_cluster_name, "--aws-creds", my_path + '/aws_creds', "--pull-secret", pull_secret_file, "--region", mgmt_cluster_aws_zone, "--node-pool-replicas", str(worker_nodes), '--wait']
     if args.wildcard_options:
         for param in args.wildcard_options.split():
             cluster_cmd.append(param)
@@ -151,7 +170,7 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
     installation_log = open(cluster_path + "/" + 'installation.log', 'w')
     cluster_start_time = int(time.time())
     process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log)
-    logging.info('Started cluster %d' % my_inc)
+    logging.info('Started cluster %d with %d workers' % (my_inc, worker_nodes))
     stdout,stderr = process.communicate()
     # Getting information to add it on metadata
     cluster_end_time = int(time.time())
@@ -162,10 +181,58 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
     except Exception as err:
         logging.error(err)
         logging.error('Failed to write metadata_install.json file located %s' % cluster_path)
+    metadata['mgmt_cluster_name'] = mgmt_cluster_name
+    metadata['job_iterations'] = str(job_iterations) if cluster_load else 0
+    metadata['workers'] = str(worker_nodes)
     if es is not None:
-        metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        # metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
         es_ignored_metadata = ""
         common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
+    if cluster_load:
+        logging.info('Executing e2e-benchmarking to add load on the cluster %s with %s nodes during 10 minutes with %d iterations' % (cluster_name, str(worker_nodes), job_iterations))
+        _cluster_load(kubeconfig_location, my_path, cluster_name, job_iterations, es_url)
+
+def _cluster_load(kubeconfig, my_path, hosted_cluster_name, jobs, es_url):
+    os.environ["KUBECONFIG"] = kubeconfig
+    logging.info('Getting kubeconfig for hosted cluster %s' % hosted_cluster_name)
+    kubeconfig_hosted = ["oc", "get", "secret", hosted_cluster_name + "-admin-kubeconfig", "-o", "json", "-n", "clusters"]
+    logging.debug(kubeconfig_hosted)
+    kubeconfig_hosted_process = subprocess.Popen(kubeconfig_hosted,stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
+    kubeconfig_hosted_stdout,kubeconfig_hosted_stderr = kubeconfig_hosted_process.communicate()
+    kubeconfig_hosted_content = base64.b64decode(json.loads(kubeconfig_hosted_stdout)['data']['kubeconfig']).decode('ascii')
+    try:
+        logging.debug('Saving kubeconfig file of %s to the working directory' % hosted_cluster_name)
+        seed_file = open(my_path + "/" + hosted_cluster_name + "/kubeconfig", 'x')
+        seed_file.write(kubeconfig_hosted_content)
+        seed_file.close()
+    except Exception as err:
+        logging.debug('Cannot write file %s/%s/kubeconfig' % (my_path, hosted_cluster_name))
+        logging.error(err)
+        return 1
+    os.environ["KUBECONFIG"] = my_path + "/" + hosted_cluster_name + "/kubeconfig"
+    logging.info('Cloning e2e-benchmarking repo https://github.com/cloud-bulldozer/e2e-benchmarking.git')
+    Repo.clone_from("https://github.com/cloud-bulldozer/e2e-benchmarking.git", my_path + "/" + hosted_cluster_name + '/e2e-benchmarking')
+    os.chdir(my_path + "/" + hosted_cluster_name + '/e2e-benchmarking/workloads/kube-burner')
+    os.environ["JOB_ITERATIONS"] = str(jobs)
+    os.environ["CHURN"] = "true"
+    os.environ["CHURN_DURATION"] = "4h"
+    os.environ["CHURN_PERCENT"] = "10"
+    os.environ["CHURN_WAIT"] = "30s"
+    os.environ["JOB_TIMEOUT"] = "6h"
+    os.environ["CLEANUP_WHEN_FINISH"] = "true"
+    os.environ["INDEXING"] = "false"
+    os.environ["HYPERSHIFT"] = "true"
+    if es_url is not None:
+        os.environ["ES_SERVER"] = es_url
+    os.environ["LOG_LEVEL"] = "debug"
+    os.environ["WORKLOAD"] = "cluster-density-ms"
+    load_command = ["./run.sh"]
+    logging.debug(load_command)
+    load_log = open(my_path + "/" + hosted_cluster_name + '/cluster_load.log', 'w')
+    load_process = subprocess.Popen(load_command,stdout=load_log,stderr=load_log)
+    load_process_stdout,load_process_stderr = load_process.communicate()
+
 
 def get_metadata(kubeconfig,my_path,duration,cluster_name,uuid,operation):
     os.environ["KUBECONFIG"] = kubeconfig
@@ -178,16 +245,11 @@ def get_metadata(kubeconfig,my_path,duration,cluster_name,uuid,operation):
     metadata_hosted_stdout,metadata_hosted_stderr = metadata_hosted_process.communicate()
     metadata_hosted_info = json.loads(metadata_hosted_stdout)
 
-    logging.info('Getting information for management cluster')
-    metadata_mgmt = ["oc", "get", "infrastructures", "cluster", "-o", "json"]
-    logging.debug(metadata_mgmt)
-    metadata_mgmt_process = subprocess.Popen(metadata_mgmt,stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
-    metadata_mgmt_stdout,metadata_mgmt_stderr = metadata_mgmt_process.communicate()
-    metadata_mgmt_info = json.loads(metadata_mgmt_stdout)
-
     metadata["cluster_name"] = metadata_hosted_info['metadata']['name']
-    metadata["mgmt_cluster_name"] = metadata_mgmt_info['status']['infrastructureName']
     metadata["duration"] = duration
+    metadata["network_type"] = metadata_hosted_info['spec']['networking']['networkType']
+    metadata["control_plane_topology"] = metadata_hosted_info['spec']['controllerAvailabilityPolicy']
+    metadata["infrastructure_topology"] = metadata_hosted_info['spec']['infrastructureAvailabilityPolicy']
     metadata["status"] = metadata_hosted_info['status']['version']['history'][0]['state']
     metadata["version"] = metadata_hosted_info['status']['version']['history'][0]['version']
     metadata["operation"] = operation
@@ -248,6 +310,8 @@ def _cleanup_cluster(hypershift_cmnd, kubeconfig, cluster_name, my_path, aws_reg
     stdout,stderr = process.communicate()
     cluster_end_time = int(time.time())
     metadata['duration'] = cluster_end_time - cluster_start_time
+    metadata['job_iterations'] = ""
+    metadata['workers'] = ""
     if process.returncode != 0:
         logging.error('Hosted cluster destroy failed for cluster name %s with this stdout/stderr:' % cluster_name)
         logging.error(stdout)
@@ -260,7 +324,8 @@ def _cleanup_cluster(hypershift_cmnd, kubeconfig, cluster_name, my_path, aws_reg
         logging.error(err)
         logging.error('Failed to write metadata_destroy.json file located %s' % cluster_path)
     if es is not None:
-        metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        # metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
         es_ignored_metadata = ""
         common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
 
@@ -303,7 +368,7 @@ def main():
         type=str,
         required=True,
         default='1',
-        help='Number of workers for the hosted cluster')
+        help='Number of workers for the hosted cluster. If list (comma separated), iteration over the list until reach number of clusters')
     parser.add_argument(
         '--ocm-url',
         type=str,
@@ -311,10 +376,36 @@ def main():
         default='https://api.stage.openshift.com')
     parser.add_argument(
         '--ocm-cli',
-        help='Full path to the ocm cli binary. If not provided we will download latest')
+        type=str,
+        help='Full path to the ocm cli binary. If not provided we will download it from GitHub')
+    parser.add_argument(
+        '--ocm-cli-version',
+        type=str,
+        help='When downloading from GitHub, release to download. (Default: latest, to download the most recent release)',
+        default='latest')
     parser.add_argument(
         '--hypershift-cli',
+        type=str,
         help='Full path to the hypershift cli binary. If not provided we will compile it from github')
+    parser.add_argument(
+        '--hypershift-cli-version',
+        type=str,
+        help='When downloading from GitHub, branch to pull. Default: main',
+        default='main')
+    parser.add_argument(
+        '--add-cluster-load',
+        action='store_true',
+        help='Execute e2e script after hosted cluster is installed to load it')
+    parser.add_argument(
+        '--cluster-load-jobs-per-worker',
+        type=int,
+        default=10,
+        help='Optimus number of job iterations per worker. Workload will scale it to the number of workers')
+    parser.add_argument(
+        '--cluster-load-job-variation',
+        type=int,
+        default=0,
+        help='Percentage of variation of jobs to execute. Job iterations will be a number from jobs_per_worker * workers * (-X%% to +X%%)')
 
     global args
     args = parser.parse_args()
@@ -406,7 +497,7 @@ def main():
         logging.error(err)
         exit(1)
 
-    ocm_cmnd,hypershift_cmnd = _verify_cmnds(args.ocm_cli,args.hypershift_cli,my_path)
+    ocm_cmnd,hypershift_cmnd = _verify_cmnds(args.ocm_cli,args.hypershift_cli,my_path,args.ocm_cli_version,args.hypershift_cli_version)
 
     logging.info('Attempting to log in OCM using `ocm login`')
     ocm_login_command = [ocm_cmnd, "login", "--url=" + args.ocm_url, "--token=" + args.ocm_token]
@@ -430,7 +521,7 @@ def main():
         logging.error('Failed to read pull secret file %s' % args.pull_secret_file)
         exit(1)
 
-    mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, args.mgmt_cluster,es,args.es_index,args.es_index_retry,my_uuid,args.cluster_count,args.workers)
+    mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, args.mgmt_cluster,es,args.es_index,args.es_index_retry,my_uuid,args.cluster_count)
 
     if 'cluster_id' not in mgmt_metadata or 'base_domain' not in mgmt_metadata or 'aws_region' not in mgmt_metadata:
         logging.error('Failed to obtain Management Cluster information from %s' % args.mgmt_cluster)
@@ -501,8 +592,24 @@ def main():
 
             if create_cluster:
                 logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
+                pattern = re.compile(r"^(\d+)(,\s*\d+)*$")
+                if args.workers.isdigit():
+                    workers = args.workers
+                elif bool(pattern.match(args.workers)):
+                    workers = int(args.workers.split(",")[(loop_counter - 1) % len(args.workers.split(","))])
+                    if args.add_cluster_load:
+                        low_jobs = int((args.cluster_load_jobs_per_worker * workers) - (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100))
+                        high_jobs = int((args.cluster_load_jobs_per_worker * workers) + (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100))
+                        jobs = random.randint(low_jobs, high_jobs)
+                        logging.debug("Selected jobs: %d" % jobs)
+                    else:
+                        jobs = 0
+                else:
+                    logging.error("Invalid value for parameter --workers %s. Setting workers to 0" % args.workers)
+                    workers = 0
+                    jobs = 0
                 try:
-                    thread = threading.Thread(target=_build_cluster,args=(hypershift_cmnd,mgmt_kubeconfig_path,cluster_name_seed,mgmt_metadata['base_domain'],args.workers,mgmt_metadata['aws_region'],args.pull_secret_file,my_path,my_uuid,loop_counter,es,args.es_index,args.es_index_retry,mgmt_metadata["cluster_name"]))
+                    thread = threading.Thread(target=_build_cluster,args=(hypershift_cmnd,mgmt_kubeconfig_path,cluster_name_seed,mgmt_metadata['base_domain'],args.add_cluster_load,jobs,workers,mgmt_metadata['aws_region'],args.pull_secret_file,my_path,my_uuid,loop_counter,es,args.es_url,args.es_index,args.es_index_retry,mgmt_metadata["cluster_name"]))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
@@ -567,9 +674,9 @@ def main():
         watcher_cleanup.run = False
         watcher.join()
 
-    if args.cleanup:
-        logging.info('Cleaning working directory %s' % my_path)
-        shutil.rmtree(my_path)
+    # if args.cleanup:
+    #     logging.info('Cleaning working directory %s' % my_path)
+    #     shutil.rmtree(my_path)
 
 # Last, output test result
     logging.info('************************************************************************')
