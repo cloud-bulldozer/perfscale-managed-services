@@ -17,10 +17,9 @@ def _connect_to_es(es_url, insecure):
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
             ssl_ctx.check_hostname = False
             ssl_ctx.verify_mode = ssl.CERT_NONE
-        es = elasticsearch.Elasticsearch([es_url], send_get_body_as='POST',
-                                         ssl_context=ssl_ctx, use_ssl=True)
+        es = elasticsearch.Elasticsearch([es_url],ssl_context=ssl_ctx,verify_certs=False)
     elif es_url.startswith('http://'):
-        es = elasticsearch.Elasticsearch([es_url], send_get_body_as='POST')
+        es = elasticsearch.Elasticsearch([es_url])
     else:
         logging.error('Invalid ES URL: %s' % es_url)
         exit(1)
