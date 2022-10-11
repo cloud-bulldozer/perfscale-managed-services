@@ -12,6 +12,7 @@ This repo contains script to automate and test deployments on [Red Hat Managed S
 
 - [osde2e-wrapper](./osde2e/README.md)
 - [rosa-wrapper](./rosa/README.md)
+- [hypershift-wrapper](./hypershift/README.md)
 
 ## Running tests
 
