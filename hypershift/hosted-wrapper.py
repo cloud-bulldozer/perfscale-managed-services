@@ -33,6 +33,7 @@ from git import Repo
 from libs import common
 from libs import parentParsers
 
+
 def _verify_cmnds(ocm_cmnd, hypershift_cmnd, my_path, ocm_version, hypershift_version):
     # If the command path was not given, download latest binary from github
     if ocm_cmnd is None:
@@ -41,7 +42,7 @@ def _verify_cmnds(ocm_cmnd, hypershift_cmnd, my_path, ocm_version, hypershift_ve
         tags_list = []
         try:
             tags = requests.get(url='https://api.github.com/repos/openshift-online/ocm-cli/git/refs/tags')
-        except (requests.ConnectionError,urllib.error.HTTPError) as err:
+        except (requests.ConnectionError, urllib.error.HTTPError) as err:
             logging.error('Cannot download tags list from https://api.github.com/repos/openshift-online/ocm-cli/git/refs/tags')
             logging.error(err)
             exit(1)
@@ -50,14 +51,14 @@ def _verify_cmnds(ocm_cmnd, hypershift_cmnd, my_path, ocm_version, hypershift_ve
             tags_list.append(tag['ref'].split('/')[-1].split('v')[-1])
         logging.debug('List of tags: %s' % tags_list)
         if ocm_version == 'latest':
-            version = sorted(tags_list,key=ver.StrictVersion)[-1]
+            version = sorted(tags_list, key=ver.StrictVersion)[-1]
         else:
             version = None
             for tag in tags_list:
                 if tag == ocm_version:
                     version = tag
             if version is None:
-                version = sorted(tags_list,key=ver.StrictVersion)[-1]
+                version = sorted(tags_list, key=ver.StrictVersion)[-1]
                 logging.error('Invalid OCM release %s, downloading latest release identified as %s' % (ocm_version, version))
         logging.info('Downloading release identified as %s' % version)
         try:
@@ -72,7 +73,7 @@ def _verify_cmnds(ocm_cmnd, hypershift_cmnd, my_path, ocm_version, hypershift_ve
     logging.info('Testing ocm command with: ocm -h')
     ocm_cmd = [ocm_cmnd, "-h"]
     ocm_process = subprocess.Popen(ocm_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    ocm_stdout,ocm_stderr = ocm_process.communicate()
+    ocm_stdout, ocm_stderr = ocm_process.communicate()
     if ocm_process.returncode != 0:
         logging.error('%s unable to execute -h' % ocm_cmnd)
         logging.error(ocm_stderr.strip().decode("utf-8"))
@@ -86,7 +87,7 @@ def _verify_cmnds(ocm_cmnd, hypershift_cmnd, my_path, ocm_version, hypershift_ve
         logging.info('Compiling hypershift cli on %s' % my_path + '/hypershift')
         make_cmd = ["make", "build"]
         make_process = subprocess.Popen(make_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        make_stdout,make_stderr = make_process.communicate()
+        make_stdout, make_stderr = make_process.communicate()
         if make_process.returncode != 0:
             logging.error('%s unable to execute' % make_cmd)
             logging.error(make_stderr.strip().decode("utf-8"))
@@ -97,7 +98,7 @@ def _verify_cmnds(ocm_cmnd, hypershift_cmnd, my_path, ocm_version, hypershift_ve
     logging.info('Testing hypershift command with: hypershift -h')
     hypershift_cmd = [hypershift_cmnd, "-h"]
     hypershift_process = subprocess.Popen(hypershift_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    hypershift_stdout,hypershift_stderr = hypershift_process.communicate()
+    hypershift_stdout, hypershift_stderr = hypershift_process.communicate()
     if hypershift_process.returncode != 0:
         logging.error('%s unable to execute -h' % hypershift_cmnd)
         logging.error(hypershift_stderr.strip().decode("utf-8"))
@@ -105,11 +106,12 @@ def _verify_cmnds(ocm_cmnd, hypershift_cmnd, my_path, ocm_version, hypershift_ve
     logging.info('hypershift command validated with -h. Directory is %s' % my_path)
     return (ocm_cmnd, hypershift_cmnd)
 
-def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster,es,index,index_retry,uuid,hostedclusters):
+
+def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster, es, index, index_retry, uuid, hostedclusters):
     logging.info('Getting Management Cluster Information from %s' % mgmt_cluster)
     ocm_command = [ocm_cmnd, "get", "/api/clusters_mgmt/v1/clusters"]
     ocm_process = subprocess.Popen(ocm_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    ocm_stdout,ocm_stderr = ocm_process.communicate()
+    ocm_stdout, ocm_stderr = ocm_process.communicate()
     if ocm_process.returncode != 0:
         logging.error('%s unable to execute ' % ocm_command)
         logging.error(ocm_stderr.strip().decode("utf-8"))
@@ -132,16 +134,16 @@ def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster,es,index,index_retry,uuid,host
                 metadata['hostedclusters'] = hostedclusters
                 es_ignored_metadata = ""
                 if es is not None:
-                    common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
+                    common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
                 return metadata
 
 
-def _download_kubeconfig(ocm_cmnd,mgmt_cluster_id,my_path):
-    logging.debug('Downloading kubeconfig file for Management Cluster %s on %s' % (mgmt_cluster_id,my_path))
-    kubeconfig_cmd = ["ocm", "get", "/api/clusters_mgmt/v1/clusters/" + mgmt_cluster_id + "/credentials"]
+def _download_kubeconfig(ocm_cmnd, mgmt_cluster_id, my_path):
+    logging.debug('Downloading kubeconfig file for Management Cluster %s on %s' % (mgmt_cluster_id, my_path))
+    kubeconfig_cmd = [ocm_cmnd, "get", "/api/clusters_mgmt/v1/clusters/" + mgmt_cluster_id + "/credentials"]
     logging.debug(kubeconfig_cmd)
-    process = subprocess.Popen(kubeconfig_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
-    stdout,stderr = process.communicate()
+    process = subprocess.Popen(kubeconfig_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
+    stdout, stderr = process.communicate()
     if process.returncode != 0:
         logging.error('Failed to download kubeconfig file for Management Cluster ID %s with this stdout/stderr:' % mgmt_cluster_id)
         logging.error(stdout)
@@ -154,27 +156,28 @@ def _download_kubeconfig(ocm_cmnd,mgmt_cluster_id,my_path):
         return kubeconfig_path
 
 
-def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt_cluster_base_domain, cluster_load, job_iterations, worker_nodes, mgmt_cluster_aws_zone, pull_secret_file, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_cluster_name):
-    os.environ["KUBECONFIG"] = kubeconfig_location
+def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt_cluster_base_domain, cluster_load, load_duration, job_iterations, worker_nodes, mgmt_cluster_aws_zone, pull_secret_file, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_cluster_name):
+    myenv = os.environ.copy()
+    myenv["KUBECONFIG"] = kubeconfig_location
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
     os.mkdir(cluster_path)
     logging.debug('Attempting cluster installation')
     logging.debug('Output directory set to %s' % cluster_path)
     cluster_name = cluster_name_seed + "-" + str(my_inc).zfill(4)
-    cluster_cmd = [hypershift_cmnd, "create","cluster", "aws", "--name", cluster_name, "--base-domain", mgmt_cluster_base_domain, "--additional-tags", "mgmt-cluster=" + mgmt_cluster_name, "--aws-creds", my_path + '/aws_creds', "--pull-secret", pull_secret_file, "--region", mgmt_cluster_aws_zone, "--node-pool-replicas", str(worker_nodes), '--wait']
+    cluster_cmd = [hypershift_cmnd, "create", "cluster", "aws", "--name", cluster_name, "--base-domain", mgmt_cluster_base_domain, "--additional-tags", "mgmt-cluster=" + mgmt_cluster_name, "--aws-creds", my_path + '/aws_creds', "--pull-secret", pull_secret_file, "--region", mgmt_cluster_aws_zone, "--node-pool-replicas", str(worker_nodes), '--wait']
     if args.wildcard_options:
         for param in args.wildcard_options.split():
             cluster_cmd.append(param)
     logging.debug(cluster_cmd)
     installation_log = open(cluster_path + "/" + 'installation.log', 'w')
     cluster_start_time = int(time.time())
-    process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log)
+    process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log, env=myenv)
     logging.info('Started cluster %d with %d workers' % (my_inc, worker_nodes))
-    stdout,stderr = process.communicate()
+    stdout, stderr = process.communicate()
     # Getting information to add it on metadata
     cluster_end_time = int(time.time())
-    metadata = get_metadata(kubeconfig_location,cluster_path,cluster_end_time - cluster_start_time, cluster_name,my_uuid,"install")
+    metadata = get_metadata(kubeconfig_location, cluster_path, cluster_end_time - cluster_start_time, cluster_name, my_uuid, "install")
     try:
         with open(cluster_path + "/metadata_install.json", "w") as metadata_file:
             json.dump(metadata, metadata_file)
@@ -183,23 +186,26 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
         logging.error('Failed to write metadata_install.json file located %s' % cluster_path)
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
     metadata['job_iterations'] = str(job_iterations) if cluster_load else 0
+    metadata['load_duration'] = load_duration if cluster_load else ""
     metadata['workers'] = str(worker_nodes)
     if es is not None:
         # metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
         es_ignored_metadata = ""
-        common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
+        common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
     if cluster_load:
-        logging.info('Executing e2e-benchmarking to add load on the cluster %s with %s nodes during 10 minutes with %d iterations' % (cluster_name, str(worker_nodes), job_iterations))
-        _cluster_load(kubeconfig_location, my_path, cluster_name, job_iterations, es_url)
+        logging.info('Executing e2e-benchmarking to add load on the cluster %s with %s nodes during %s with %d iterations' % (cluster_name, str(worker_nodes), load_duration, job_iterations))
+        _cluster_load(kubeconfig_location, my_path, cluster_name, load_duration, job_iterations, es_url, mgmt_cluster_name)
 
-def _cluster_load(kubeconfig, my_path, hosted_cluster_name, jobs, es_url):
-    os.environ["KUBECONFIG"] = kubeconfig
+
+def _cluster_load(kubeconfig, my_path, hosted_cluster_name, load_duration, jobs, es_url, mgmt_cluster_name):
+    myenv = os.environ.copy()
+    myenv["KUBECONFIG"] = kubeconfig
     logging.info('Getting kubeconfig for hosted cluster %s' % hosted_cluster_name)
     kubeconfig_hosted = ["oc", "get", "secret", hosted_cluster_name + "-admin-kubeconfig", "-o", "json", "-n", "clusters"]
     logging.debug(kubeconfig_hosted)
-    kubeconfig_hosted_process = subprocess.Popen(kubeconfig_hosted,stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
-    kubeconfig_hosted_stdout,kubeconfig_hosted_stderr = kubeconfig_hosted_process.communicate()
+    kubeconfig_hosted_process = subprocess.Popen(kubeconfig_hosted, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    kubeconfig_hosted_stdout, kubeconfig_hosted_stderr = kubeconfig_hosted_process.communicate()
     kubeconfig_hosted_content = base64.b64decode(json.loads(kubeconfig_hosted_stdout)['data']['kubeconfig']).decode('ascii')
     try:
         logging.debug('Saving kubeconfig file of %s to the working directory' % hosted_cluster_name)
@@ -210,41 +216,45 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, jobs, es_url):
         logging.debug('Cannot write file %s/%s/kubeconfig' % (my_path, hosted_cluster_name))
         logging.error(err)
         return 1
-    os.environ["KUBECONFIG"] = my_path + "/" + hosted_cluster_name + "/kubeconfig"
+    load_env = os.environ.copy()
+    load_env["KUBECONFIG"] = my_path + "/" + hosted_cluster_name + "/kubeconfig"
     logging.info('Cloning e2e-benchmarking repo https://github.com/cloud-bulldozer/e2e-benchmarking.git')
     Repo.clone_from("https://github.com/cloud-bulldozer/e2e-benchmarking.git", my_path + "/" + hosted_cluster_name + '/e2e-benchmarking')
     os.chdir(my_path + "/" + hosted_cluster_name + '/e2e-benchmarking/workloads/kube-burner')
-    os.environ["JOB_ITERATIONS"] = str(jobs)
-    os.environ["CHURN"] = "true"
-    os.environ["CHURN_DURATION"] = "4h"
-    os.environ["CHURN_PERCENT"] = "10"
-    os.environ["CHURN_WAIT"] = "30s"
-    os.environ["JOB_TIMEOUT"] = "6h"
-    os.environ["CLEANUP_WHEN_FINISH"] = "true"
-    os.environ["INDEXING"] = "false"
-    os.environ["HYPERSHIFT"] = "true"
+    load_env["JOB_ITERATIONS"] = str(jobs)
+    load_env["CHURN"] = "true"
+    load_env["CHURN_DURATION"] = load_duration
+    load_env["CHURN_PERCENT"] = "10"
+    load_env["CHURN_WAIT"] = "30s"
+    load_env["JOB_TIMEOUT"] = "6h"
+    load_env["CLEANUP_WHEN_FINISH"] = "true"
+    load_env["INDEXING"] = "true"
+    load_env["HYPERSHIFT"] = "true"
+    load_env["MGMT_CLUSTER_NAME"] = mgmt_cluster_name
+    load_env["HOSTED_CLUSTER_NS"] = "clusters-" + hosted_cluster_name
     if es_url is not None:
-        os.environ["ES_SERVER"] = es_url
-    os.environ["LOG_LEVEL"] = "debug"
-    os.environ["WORKLOAD"] = "cluster-density-ms"
+        load_env["ES_SERVER"] = es_url
+    load_env["PROM_URL"] = "https://thanos-query.apps.observability.perfscale.devcluster.openshift.com"
+    load_env["THANOS_RECEIVER_URL"] = "http://thanos.apps.observability.perfscale.devcluster.openshift.com/api/v1/receive"
+    load_env["LOG_LEVEL"] = "debug"
+    load_env["WORKLOAD"] = "cluster-density-ms"
     load_command = ["./run.sh"]
     logging.debug(load_command)
     load_log = open(my_path + "/" + hosted_cluster_name + '/cluster_load.log', 'w')
-    load_process = subprocess.Popen(load_command,stdout=load_log,stderr=load_log)
-    load_process_stdout,load_process_stderr = load_process.communicate()
+    load_process = subprocess.Popen(load_command, stdout=load_log, stderr=load_log, env=load_env)
+    load_process_stdout, load_process_stderr = load_process.communicate()
 
 
-def get_metadata(kubeconfig,my_path,duration,cluster_name,uuid,operation):
-    os.environ["KUBECONFIG"] = kubeconfig
+def get_metadata(kubeconfig, my_path, duration, cluster_name, uuid, operation):
+    myenv = os.environ.copy()
+    myenv["KUBECONFIG"] = kubeconfig
     metadata = {}
-
     logging.info('Getting information for hosted cluster %s' % cluster_name)
     metadata_hosted = ["oc", "get", "hostedcluster", "-n", "clusters", cluster_name, "-o", "json"]
     logging.debug(metadata_hosted)
-    metadata_hosted_process = subprocess.Popen(metadata_hosted,stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
-    metadata_hosted_stdout,metadata_hosted_stderr = metadata_hosted_process.communicate()
+    metadata_hosted_process = subprocess.Popen(metadata_hosted, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    metadata_hosted_stdout, metadata_hosted_stderr = metadata_hosted_process.communicate()
     metadata_hosted_info = json.loads(metadata_hosted_stdout)
-
     metadata["cluster_name"] = metadata_hosted_info['metadata']['name']
     metadata["duration"] = duration
     metadata["network_type"] = metadata_hosted_info['spec']['networking']['networkType']
@@ -256,8 +266,10 @@ def get_metadata(kubeconfig,my_path,duration,cluster_name,uuid,operation):
     metadata["uuid"] = uuid
     return metadata
 
+
 def _watcher(kubeconfig_location, cluster_name_seed, cluster_count, delay, my_uuid, clusters_resume):
-    os.environ["KUBECONFIG"] = kubeconfig_location
+    myenv = os.environ.copy()
+    myenv["KUBECONFIG"] = kubeconfig_location
     time.sleep(60)
     logging.info('Watcher thread started')
     logging.info('Getting status every %d seconds' % int(delay))
@@ -267,8 +279,8 @@ def _watcher(kubeconfig_location, cluster_name_seed, cluster_count, delay, my_uu
     # To stop the watcher we expect the run attribute to be not True
     while getattr(my_thread, "run", True):
         logging.debug(cmd)
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,universal_newlines=True)
-        stdout,stderr = process.communicate()
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+        stdout, stderr = process.communicate()
         current_cluster_count = 0
         state = {}
         error = []
@@ -283,7 +295,7 @@ def _watcher(kubeconfig_location, cluster_name_seed, cluster_count, delay, my_uu
                     if state_key == "error":
                         error.append(line.split()[0])
 
-        logging.info('Requested Clusters for test %s: %d' % (my_uuid,cluster_count))
+        logging.info('Requested Clusters for test %s: %d' % (my_uuid, cluster_count))
         if current_cluster_count != 0:
             logging.debug(state.items())
             state_output = "Current clusters state: " + str(current_cluster_count) + " clusters"
@@ -297,20 +309,24 @@ def _watcher(kubeconfig_location, cluster_name_seed, cluster_count, delay, my_uu
         time.sleep(delay)
     logging.info('Watcher exiting')
 
-def _cleanup_cluster(hypershift_cmnd, kubeconfig, cluster_name, my_path, aws_region,my_uuid,es,index,index_retry):
-    os.environ["KUBECONFIG"] = kubeconfig
+
+def _cleanup_cluster(hypershift_cmnd, kubeconfig, mgmt_cluster_name, cluster_name, my_path, aws_region, my_uuid, es, index, index_retry):
+    myenv = os.environ.copy()
+    myenv["KUBECONFIG"] = kubeconfig
     cluster_path = my_path + "/" + cluster_name
-    metadata = get_metadata(kubeconfig,cluster_path,0,cluster_name,my_uuid,"destroy")
+    metadata = get_metadata(kubeconfig, cluster_path, 0, cluster_name, my_uuid, "destroy")
     logging.debug('Destroying cluster name: %s' % cluster_name)
     del_cmd = [hypershift_cmnd, "destroy", "cluster", "aws", "--name", cluster_name, "--aws-creds", my_path + "/aws_creds", "--region", aws_region]
     logging.debug(del_cmd)
     cleanup_log = open(cluster_path + '/cleanup.log', 'w')
     cluster_start_time = int(time.time())
-    process = subprocess.Popen(del_cmd, stdout=cleanup_log, stderr=cleanup_log)
-    stdout,stderr = process.communicate()
+    process = subprocess.Popen(del_cmd, stdout=cleanup_log, stderr=cleanup_log, env=myenv)
+    stdout, stderr = process.communicate()
     cluster_end_time = int(time.time())
+    metadata['mgmt_cluster_name'] = mgmt_cluster_name
     metadata['duration'] = cluster_end_time - cluster_start_time
     metadata['job_iterations'] = ""
+    metadata['load_duration'] = ""
     metadata['workers'] = ""
     if process.returncode != 0:
         logging.error('Hosted cluster destroy failed for cluster name %s with this stdout/stderr:' % cluster_name)
@@ -327,7 +343,7 @@ def _cleanup_cluster(hypershift_cmnd, kubeconfig, cluster_name, my_path, aws_reg
         # metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
         es_ignored_metadata = ""
-        common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
+        common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
 
 
 def main():
@@ -397,6 +413,11 @@ def main():
         action='store_true',
         help='Execute e2e script after hosted cluster is installed to load it')
     parser.add_argument(
+        '--cluster-load-duration',
+        type=str,
+        default='4h',
+        help='CHURN_DURATION parameter used on the e2e script')
+    parser.add_argument(
         '--cluster-load-jobs-per-worker',
         type=int,
         default=10,
@@ -441,7 +462,7 @@ def main():
 
     try:
         logging.debug('Saving test UUID to the working directory')
-        uuid_file = open(my_path + '/uuid','x')
+        uuid_file = open(my_path + '/uuid', 'x')
         uuid_file.write(my_uuid)
         uuid_file.close()
     except Exception as err:
@@ -474,7 +495,7 @@ def main():
         if 'aws_access_key_id' not in aws_config[profile] or 'aws_secret_access_key' not in aws_config[profile]:
             parser.error("Missing keys for profile on AWS credentials file")
         else:
-            logging.info('AWS configuration verified for profile %s on file %s' % (profile,args.aws_account_file))
+            logging.info('AWS configuration verified for profile %s on file %s' % (profile, args.aws_account_file))
             write_config = configparser.RawConfigParser()
             write_config[profile] = {}
             write_config[profile]['aws_access_key_id'] = aws_config[profile]['aws_access_key_id']
@@ -489,7 +510,7 @@ def main():
 
     try:
         logging.debug('Saving cluster name seed %s to the working directory' % cluster_name_seed)
-        seed_file = open(my_path + '/cluster_name_seed','x')
+        seed_file = open(my_path + '/cluster_name_seed', 'x')
         seed_file.write(cluster_name_seed)
         seed_file.close()
     except Exception as err:
@@ -497,13 +518,13 @@ def main():
         logging.error(err)
         exit(1)
 
-    ocm_cmnd,hypershift_cmnd = _verify_cmnds(args.ocm_cli,args.hypershift_cli,my_path,args.ocm_cli_version,args.hypershift_cli_version)
+    ocm_cmnd, hypershift_cmnd = _verify_cmnds(args.ocm_cli, args.hypershift_cli, my_path, args.ocm_cli_version, args.hypershift_cli_version)
 
     logging.info('Attempting to log in OCM using `ocm login`')
     ocm_login_command = [ocm_cmnd, "login", "--url=" + args.ocm_url, "--token=" + args.ocm_token]
     logging.debug(ocm_login_command)
     ocm_login_process = subprocess.Popen(ocm_login_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    ocm_login_stdout,ocm_login_stderr = ocm_login_process.communicate()
+    ocm_login_stdout, ocm_login_stderr = ocm_login_process.communicate()
     if ocm_login_process.returncode != 0:
         logging.error('%s unable to execute `ocm login`' % ocm_cmnd)
         logging.error(ocm_login_stderr.strip().decode("utf-8"))
@@ -521,7 +542,7 @@ def main():
         logging.error('Failed to read pull secret file %s' % args.pull_secret_file)
         exit(1)
 
-    mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, args.mgmt_cluster,es,args.es_index,args.es_index_retry,my_uuid,args.cluster_count)
+    mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, args.mgmt_cluster, es, args.es_index, args.es_index_retry, my_uuid, args.cluster_count)
 
     if 'cluster_id' not in mgmt_metadata or 'base_domain' not in mgmt_metadata or 'aws_region' not in mgmt_metadata:
         logging.error('Failed to obtain Management Cluster information from %s' % args.mgmt_cluster)
@@ -537,18 +558,19 @@ def main():
         mgmt_kubeconfig_path = args.mgmt_kubeconfig
     elif args.mgmt_cluster:
         logging.debug('Downloading kubeconfig for Management Cluster %s:' % args.mgmt_cluster)
-        mgmt_kubeconfig_path = _download_kubeconfig(ocm_cmnd,mgmt_metadata['cluster_id'],my_path)
+        mgmt_kubeconfig_path = _download_kubeconfig(ocm_cmnd, mgmt_metadata['cluster_id'], my_path)
         if not os.path.exists(mgmt_kubeconfig_path):
             logging.error('Management Cluster kubeconfig not found %s' % mgmt_kubeconfig_path)
             exit(1)
         else:
-            os.environ["KUBECONFIG"] = mgmt_kubeconfig_path
+            mgmt_env = os.environ.copy()
+            mgmt_env["KUBECONFIG"] = mgmt_kubeconfig_path
             # Check if hosted cluster CRD is installed
             logging.info('Checking if hosted cluster CRD is installed on Management Cluster...')
             oc_cmd = ["oc", "get", "crd", "hostedclusters.hypershift.openshift.io"]
             logging.debug(oc_cmd)
-            oc_process = subprocess.Popen(oc_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            oc_stdout,oc_stderr = oc_process.communicate()
+            oc_process = subprocess.Popen(oc_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=mgmt_env)
+            oc_stdout, oc_stderr = oc_process.communicate()
             if oc_process.returncode != 0:
                 logging.error('%s Hosted clusters CRD is not installed on %s' % mgmt_metadata['cluster_name'])
             else:
@@ -560,11 +582,11 @@ def main():
     # launch watcher thread to report status
     logging.info('Launching watcher thread')
     clusters_resume = {}
-    watcher = threading.Thread(target=_watcher,args=(hypershift_cmnd,cluster_name_seed,args.cluster_count,args.watcher_delay,my_uuid,clusters_resume))
+    watcher = threading.Thread(target=_watcher, args=(hypershift_cmnd, cluster_name_seed, args.cluster_count, args.watcher_delay, my_uuid, clusters_resume))
     watcher.daemon = True
     watcher.start()
 
-    logging.info('Attempting to start %d clusters with %d batch size' % (args.cluster_count,args.batch_size))
+    logging.info('Attempting to start %d clusters with %d batch size' % (args.cluster_count, args.batch_size))
     cluster_thread_list = []
     batch_count = 0
     loop_counter = 0
@@ -609,7 +631,7 @@ def main():
                     workers = 0
                     jobs = 0
                 try:
-                    thread = threading.Thread(target=_build_cluster,args=(hypershift_cmnd,mgmt_kubeconfig_path,cluster_name_seed,mgmt_metadata['base_domain'],args.add_cluster_load,jobs,workers,mgmt_metadata['aws_region'],args.pull_secret_file,my_path,my_uuid,loop_counter,es,args.es_url,args.es_index,args.es_index_retry,mgmt_metadata["cluster_name"]))
+                    thread = threading.Thread(target=_build_cluster, args=(hypershift_cmnd, mgmt_kubeconfig_path, cluster_name_seed, mgmt_metadata['base_domain'], args.add_cluster_load, args.cluster_load_duration, jobs, workers, mgmt_metadata['aws_region'], args.pull_secret_file, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_metadata["cluster_name"]))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
@@ -636,23 +658,19 @@ def main():
     watcher.join()
 
     if args.cleanup_clusters:
-        logging.info('Launching cluster cleanup watcher thread')
-        cluster_cleanup_resume = {}
-        watcher_cleanup = threading.Thread(target=_watcher,args=(hypershift_cmnd,cluster_name_seed,args.cluster_count,args.watcher_delay,my_uuid,cluster_cleanup_resume))
-        watcher_cleanup.daemon = True
-        watcher_cleanup.start()
         logging.info('Attempting to delete all hosted clusters with seed %s' % (cluster_name_seed))
         delete_cluster_thread_list = []
-        os.environ["KUBECONFIG"] = mgmt_kubeconfig_path
+        cleanup_env = os.environ.copy()
+        cleanup_env["KUBECONFIG"] = mgmt_kubeconfig_path
         cmd = ["oc", "get", "hostedclusters", "-n", "clusters"]
         logging.debug(cmd)
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,universal_newlines=True)
-        stdout,stderr = process.communicate()
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=cleanup_env)
+        stdout, stderr = process.communicate()
         for line in stdout.splitlines():
             if cluster_name_seed in line.split()[0]:
                 logging.debug('Starting Hosted cluster cleanup %s' % line.split()[0])
                 try:
-                    thread = threading.Thread(target=_cleanup_cluster,args=(hypershift_cmnd,mgmt_kubeconfig_path,line.split()[0],my_path,mgmt_metadata['aws_region'],my_uuid,es,args.es_index,args.es_index_retry))
+                    thread = threading.Thread(target=_cleanup_cluster, args=(hypershift_cmnd, mgmt_kubeconfig_path, mgmt_metadata["cluster_name"], line.split()[0], my_path, mgmt_metadata['aws_region'], my_uuid, es, args.es_index, args.es_index_retry))
                 except Exception as err:
                     logging.error('Thread creation failed')
                     logging.error(err)
@@ -661,8 +679,8 @@ def main():
                 logging.debug('Number of alive threads %d' % threading.active_count())
 
         # Wait for active threads to finish
-        logging.info('All clusters (%d) requested to be deleted. Waiting for them to finish' % len(cluster_thread_list))
-        for t in cluster_thread_list:
+        logging.info('All clusters (%d) requested to be deleted. Waiting for them to finish' % len(delete_cluster_thread_list))
+        for t in delete_cluster_thread_list:
             try:
                 t.join()
             except RuntimeError as err:
@@ -671,23 +689,21 @@ def main():
                     continue
                 else:
                     raise
-        watcher_cleanup.run = False
-        watcher.join()
 
-    # if args.cleanup:
-    #     logging.info('Cleaning working directory %s' % my_path)
-    #     shutil.rmtree(my_path)
+    if args.cleanup:
+        logging.info('Cleaning working directory %s' % my_path)
+        shutil.rmtree(my_path)
 
 # Last, output test result
     logging.info('************************************************************************')
     logging.info('********* Summary for test %s *********' % (my_uuid))
     logging.info('************************************************************************')
-    logging.info('Requested Clusters for test %s: %d' % (my_uuid,args.cluster_count))
+    logging.info('Requested Clusters for test %s: %d' % (my_uuid, args.cluster_count))
     if 'clusters_created' in clusters_resume:
-        logging.info('Created   Clusters for test %s: %d' % (my_uuid,clusters_resume['clusters_created']))
+        logging.info('Created   Clusters for test %s: %d' % (my_uuid, clusters_resume['clusters_created']))
         if 'state' in clusters_resume:
             for i1 in clusters_resume['state'].items():
-                logging.info('              %s: %s' % (str(i1[0]),str(i1[1])))
+                logging.info('              %s: %s' % (str(i1[0]), str(i1[1])))
     else:
         logging.info('Created   Clusters for test %s: 0' % (my_uuid))
     logging.info('Batches size: %s' % (str(args.batch_size)))

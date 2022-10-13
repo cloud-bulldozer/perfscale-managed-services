@@ -8,6 +8,7 @@ import random
 
 _es_ignored_metadata = "before-suite-metrics,route-latencies,route-throughputs,route-availabilities,healthchecks,healthcheckIteration,status"
 
+
 def _connect_to_es(es_url, insecure):
     if es_url.startswith('https://'):
         import urllib3
@@ -17,7 +18,7 @@ def _connect_to_es(es_url, insecure):
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
             ssl_ctx.check_hostname = False
             ssl_ctx.verify_mode = ssl.CERT_NONE
-        es = elasticsearch.Elasticsearch([es_url],ssl_context=ssl_ctx,verify_certs=False)
+        es = elasticsearch.Elasticsearch([es_url], ssl_context=ssl_ctx, verify_certs=False)
     elif es_url.startswith('http://'):
         es = elasticsearch.Elasticsearch([es_url])
     else:
@@ -25,7 +26,8 @@ def _connect_to_es(es_url, insecure):
         exit(1)
     return es
 
-def _index_result(es,index,metadata,es_ignored_metadata,index_retry):
+
+def _index_result(es, index, metadata, es_ignored_metadata, index_retry):
     my_doc = _buildDoc(metadata, es_ignored_metadata)
 
     logging.debug('Document to be uploaded to ES:')
@@ -52,11 +54,13 @@ def _index_result(es,index,metadata,es_ignored_metadata,index_retry):
         logging.error('Reached the maximun number of retries: %d, ES upload failed for %s' % (index_retry, _id))
         return 1
 
+
 def _buildDoc(metadata, es_ignored_metadata):
 
     my_doc = {}
     my_doc = _getValue(metadata, es_ignored_metadata)
     return my_doc
+
 
 def _getValue(value, es_ignored_metadata):
     # Parse booleans
@@ -92,6 +96,7 @@ def _getValue(value, es_ignored_metadata):
         return dictionary
     return
 
+
 def _create_path(my_path):
     try:
         logging.info('Create directory %s if it does not exist' % my_path)
@@ -101,11 +106,12 @@ def _create_path(my_path):
             logging.error(e)
             exit(1)
 
+
 def _generate_cluster_name_seed(cluster_name_seed):
     _cluster_name_seed = cluster_name_seed
     allowed_chars = string.ascii_lowercase + string.digits
-    for l in _cluster_name_seed:
-        if l not in allowed_chars:
+    for char in _cluster_name_seed:
+        if char not in allowed_chars:
             logging.error('Cluster name seed is not valid: %s\nCluster name seed must contain only lowercase letters and digits.' % _cluster_name_seed)
             exit(1)
     random_string = ''.join(random.choice(allowed_chars) for j in range(3))
