@@ -18,22 +18,24 @@ import argparse
 import subprocess
 
 # Make aws related config changes such as security group rules etc
-def _aws_config(nodes,clustername):
+
+
+def _aws_config(nodes, clustername):
     vpc_cmd = ["aws ec2 describe-instances --query 'Reservations[*].Instances[*].[InstanceId,Tags[?Key==`Name`].Value|[0],State.Name,PrivateIpAddress,PublicIpAddress, PrivateDnsName, VpcId]' --output text | column -t | grep " + clustername + "| awk '{print $7}' | grep -v '^$' | sort -u"]
     process = subprocess.Popen(vpc_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-    stdout,stderr = process.communicate()
+    stdout, stderr = process.communicate()
     cluster_vpc = stdout.decode("utf-8")
-    cluster_vpc = cluster_vpc.replace('\n','')
-    cluster_vpc = cluster_vpc.replace(' ','')
+    cluster_vpc = cluster_vpc.replace('\n', '')
+    cluster_vpc = cluster_vpc.replace(' ', '')
 
     sec_grp_cmd = ["aws ec2 describe-security-groups --filters \"Name=vpc-id,Values=" + cluster_vpc + "\" --output json | jq .SecurityGroups[].GroupId"]
     process = subprocess.Popen(sec_grp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-    stdout,stderr = process.communicate()
+    stdout, stderr = process.communicate()
     sec_group = stdout.decode("utf-8")
 
-    sec_group = sec_group.replace(' ','')
-    sec_group = sec_group.replace('"','')
-    sec_group = sec_group.replace('\n',' ')
+    sec_group = sec_group.replace(' ', '')
+    sec_group = sec_group.replace('"', '')
+    sec_group = sec_group.replace('\n', ' ')
     sec_group_list = list(sec_group.split(" "))
 
     sec_group_cmds = ["aws ec2 authorize-security-group-ingress --group-id ITEM --protocol tcp --port 22 --cidr 0.0.0.0/0",
@@ -47,13 +49,14 @@ def _aws_config(nodes,clustername):
             return
         else:
             for cmnd in sec_group_cmds:
-                my_cmd = cmnd.replace('ITEM',item)
+                my_cmd = cmnd.replace('ITEM', item)
                 try:
                     process = subprocess.Popen(my_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-                    stdout,stderr = process.communicate()
+                    stdout, stderr = process.communicate()
                 except Exception as err:
                     print("Error occurred when setting security groups")
                     print(err)
+
 
 # Pick a worker node and also flag it as workload
 def _label_workload_machine(nodes):
@@ -64,7 +67,8 @@ def _label_workload_machine(nodes):
                 "node-role.kubernetes.io/workload": ""}
         }
     }
-    nodes.patch(body=body,label_selector='node-role.kubernetes.io/worker',name=worker_list[0].metadata.name)
+    nodes.patch(body=body, label_selector='node-role.kubernetes.io/worker', name=worker_list[0].metadata.name)
+
 
 # Remove worker label from infra nodes
 def _remove_worker_label(nodes):
@@ -76,7 +80,7 @@ def _remove_worker_label(nodes):
         }
     }
     for i in range(len(infra_list)):
-        nodes.patch(body=body,label_selector='node-role.kubernetes.io/infra',name=infra_list[i].metadata.name)
+        nodes.patch(body=body, label_selector='node-role.kubernetes.io/infra', name=infra_list[i].metadata.name)
 
 
 def main():
@@ -108,7 +112,7 @@ def main():
     else:
         cmd = ["oc get infrastructures.config.openshift.io cluster -o jsonpath={.status.infrastructureName}"]
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-    stdout,stderr = process.communicate()
+    stdout, stderr = process.communicate()
     clustername = stdout.decode("utf-8")
 
     # Remove worker label from infa nodes
@@ -118,7 +122,7 @@ def main():
     _label_workload_machine(nodes)
 
     # AWS configuration
-    _aws_config(nodes,clustername)
+    _aws_config(nodes, clustername)
 
 
 if __name__ == '__main__':

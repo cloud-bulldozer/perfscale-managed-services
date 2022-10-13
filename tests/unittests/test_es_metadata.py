@@ -114,11 +114,12 @@ class TestBuildDocument(unittest.TestCase):
     def test_buildDoc(self):
         doc = common._buildDoc(metadata, [])
         self.maxDiff = None
-        self.assertDictEqual(doc,expected)
+        self.assertDictEqual(doc, expected)
         # Test ignored<etadata feature
-        doc = common._buildDoc(metadata, ['before-suite-metrics','eof'])
+        doc = common._buildDoc(metadata, ['before-suite-metrics', 'eof'])
         self.maxDiff = None
-        self.assertDictEqual(doc,expected2)
+        self.assertDictEqual(doc, expected2)
+
 
 class Case(object):
     def __init__(self, caseName, value, expectedType, expectError):
@@ -127,8 +128,8 @@ class Case(object):
         self.expectedType = expectedType
         self.expectError = expectError
 
-class TestParseValues(unittest.TestCase):
 
+class TestParseValues(unittest.TestCase):
     def test_getValue(self):
         cases = []
         cases.append(Case("01-boolean", True, bool, False))
@@ -188,7 +189,7 @@ class TestParseValues(unittest.TestCase):
         cases.append(Case("11-dict", {'1': {'2': {'3': {'4': 6}}}}, dict, False))
 
         for case in cases:
-            v = common._getValue(case.value,[])
+            v = common._getValue(case.value, [])
             if not case.expectError:
                 self.assertEqual(case.expectedType, type(v), "error in case {}: input {}".format(case.caseName, case.value))
             else:

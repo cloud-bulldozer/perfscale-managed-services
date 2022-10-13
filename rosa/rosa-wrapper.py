@@ -28,6 +28,8 @@ from libs import parentParsers
 
 # If rosa command path is provided verify we can run the help function
 # If it is not provided, dowload binary from the latest tag
+
+
 def _verify_cmnd(rosa_cmnd, my_path):
     # If the command path was not given, download latest binary from github
     if rosa_cmnd is None:
@@ -53,13 +55,14 @@ def _verify_cmnd(rosa_cmnd, my_path):
     logging.info('Testing rosa command with: rosa -h')
     rosa_cmd = [rosa_cmnd, "-h"]
     rosa_process = subprocess.Popen(rosa_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    rosa_stdout,rosa_stderr = rosa_process.communicate()
+    rosa_stdout, rosa_stderr = rosa_process.communicate()
     if rosa_process.returncode != 0:
         logging.error('%s unable to execute -h' % rosa_cmnd)
         logging.error(rosa_stderr.strip().decode("utf-8"))
         exit(1)
     logging.info('rosa command validated with -h. Directory is %s' % my_path)
     return rosa_cmnd
+
 
 # No command to download kubeconfig using rosa CLI
 # https://issues.redhat.com/browse/SDA-3606
@@ -69,16 +72,16 @@ def _download_kubeconfig(cluster_id, my_path):
     ocm_cmd = ["ocm", "-h"]
     logging.debug(ocm_cmd)
     ocm_process = subprocess.Popen(ocm_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    ocm_stdout,ocm_stderr = ocm_process.communicate()
+    ocm_stdout, ocm_stderr = ocm_process.communicate()
     if ocm_process.returncode != 0:
         logging.error('%s unable to execute -h' % ocm_cmd)
         logging.error(ocm_stderr.strip().decode("utf-8"))
     else:
-        logging.info('Downloading kubeconfig file for cluster %s on %s' % (cluster_id,my_path))
+        logging.info('Downloading kubeconfig file for cluster %s on %s' % (cluster_id, my_path))
         kubeconfig_cmd = ["ocm", "get", "/api/clusters_mgmt/v1/clusters/" + cluster_id + "/credentials"]
         logging.debug(kubeconfig_cmd)
-        process = subprocess.Popen(kubeconfig_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
-        stdout,stderr = process.communicate()
+        process = subprocess.Popen(kubeconfig_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
+        stdout, stderr = process.communicate()
         if process.returncode != 0:
             logging.error('Failed to download kubeconfig file for cluster id %s with this stdout/stderr:' % cluster_id)
             logging.error(stdout)
@@ -90,42 +93,45 @@ def _download_kubeconfig(cluster_id, my_path):
             logging.info('Downloaded kubeconfig file for cluster %s and stored at %s' % (cluster_id, kubeconfig_path))
             return kubeconfig_path
 
+
 def _install_addons(rosa_cmnd, cluster_id, addons):
     addons_list = addons.split(",")
     for addon in addons_list:
-        logging.info('Installing %s addon on %s' % (addon,cluster_id))
+        logging.info('Installing %s addon on %s' % (addon, cluster_id))
         # TODO: Check if addon is available before executing install command: rosa list addons
         #       because rosa install do not fire any error if tried to install a non-available addon
         addon_cmd = [rosa_cmnd, "install", "addon", "--cluster", cluster_id, addon, "-y"]
         logging.debug(addon_cmd)
         addon_process = subprocess.Popen(addon_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        addon_stdout,addon_stderr = addon_process.communicate()
+        addon_stdout, addon_stderr = addon_process.communicate()
         if addon_process.returncode != 0:
-            logging.error('Unable to install addon %s on %s' % (addon,cluster_id))
+            logging.error('Unable to install addon %s on %s' % (addon, cluster_id))
             logging.error(addon_stdout.strip().decode("utf-8"))
             logging.error(addon_stderr.strip().decode("utf-8"))
         # TODO: control addon is installed with: rosa list addons -c <<cluster_name>>
 
+
 def _extend_cluster_expiration(rosa_cmnd, cluster_id, expiration):
-    logging.info('Extending cluster expiration for %d minutes on %s' % (expiration,cluster_id))
+    logging.info('Extending cluster expiration for %d minutes on %s' % (expiration, cluster_id))
     # rosa edit cluster -c 1iaaehmdd23lhifqk4fsjghrci82nt51 --expiration=3600m
     expiration_cmd = [rosa_cmnd, "edit", "cluster",
                       "--cluster", cluster_id,
-                      "--expiration", str(expiration)+'m']
+                      "--expiration", str(expiration) + 'm']
     logging.debug(expiration_cmd)
     expiration_process = subprocess.Popen(expiration_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    expiration_stdout,expiration_stderr = expiration_process.communicate()
+    expiration_stdout, expiration_stderr = expiration_process.communicate()
     if expiration_process.returncode != 0:
         logging.error('Unable to extend expiration on %s' % cluster_id)
         logging.error(expiration_stdout.strip().decode("utf-8"))
         logging.error(expiration_stderr.strip().decode("utf-8"))
         return 1
     else:
-        expiration_time = time.strftime("%Y-%m-%d %H:%M:%S %Z",time.gmtime(time.time() + expiration*60))
-        logging.info('Cluster %s will be removed in %d minutes, at %s' % (cluster_id,expiration,expiration_time))
+        expiration_time = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.gmtime(time.time() + expiration * 60))
+        logging.info('Cluster %s will be removed in %d minutes, at %s' % (cluster_id, expiration, expiration_time))
+
 
 def _add_machinepool(rosa_cmnd, kubeconfig, cluster_id):
-    logging.info('Creating machinepool %s on %s' % (args.machinepool_name,cluster_id))
+    logging.info('Creating machinepool %s on %s' % (args.machinepool_name, cluster_id))
 #  rosa create machinepool -c mycluster --name=mp-1 --replicas=2 --instance-type=r5.2xlarge --labels =foo=bar,bar=baz"
     machinepool_cmd = [rosa_cmnd, "create", "machinepool",
                        "--cluster", cluster_id,
@@ -137,20 +143,20 @@ def _add_machinepool(rosa_cmnd, kubeconfig, cluster_id):
                        "-y"]
     logging.debug(machinepool_cmd)
     machinepool_process = subprocess.Popen(machinepool_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    machinepool_stdout,machinepool_stderr = machinepool_process.communicate()
+    machinepool_stdout, machinepool_stderr = machinepool_process.communicate()
     if machinepool_process.returncode != 0:
-        logging.error('Unable to create machinepool %s on %s' % (args.machinepool_name,cluster_id))
+        logging.error('Unable to create machinepool %s on %s' % (args.machinepool_name, cluster_id))
         logging.error(machinepool_stdout.strip().decode("utf-8"))
         logging.error(machinepool_stderr.strip().decode("utf-8"))
         return 1
     else:
         if args.machinepool_wait:
-            logging.info('Created machinepool %s on %s. Waiting up to %d seconds for hosts to come up' % (args.machinepool_name,cluster_id,args.machinepool_wait_cycles*5))
+            logging.info('Created machinepool %s on %s. Waiting up to %d seconds for hosts to come up' % (args.machinepool_name, cluster_id, args.machinepool_wait_cycles * 5))
             logging.info('Checking if oc tool is available on the system')
             oc_cmd = ["oc", "-h"]
             logging.debug(oc_cmd)
             oc_process = subprocess.Popen(oc_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            oc_stdout,oc_stderr = oc_process.communicate()
+            oc_stdout, oc_stderr = oc_process.communicate()
             if oc_process.returncode != 0:
                 logging.error('%s unable to execute -h' % oc_cmd)
                 logging.error(oc_stdout.strip().decode("utf-8"))
@@ -160,13 +166,13 @@ def _add_machinepool(rosa_cmnd, kubeconfig, cluster_id):
                 kubeconfig_env = os.environ.copy()
                 kubeconfig_env["KUBECONFIG"] = kubeconfig
                 # 60 cicles, waiting 5 seconds at the end of each cicle, is about 300 seconds (5 minutes)
-                for counter in range(1,args.machinepool_wait_cycles):
+                for counter in range(1, args.machinepool_wait_cycles):
                     nodecheck_cmd = ["oc", "get", "nodes", "--no-headers=true",
                                      "-l", args.machinepool_labels,
                                      "-o", "custom-columns=NAME:metadata.name,STATUS:status.conditions[-1].type"]
                     logging.debug(nodecheck_cmd)
                     nodecheck_process = subprocess.Popen(nodecheck_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=kubeconfig_env)
-                    nodecheck_stdout,nodecheck_stderr = nodecheck_process.communicate()
+                    nodecheck_stdout, nodecheck_stderr = nodecheck_process.communicate()
                     if nodecheck_process.returncode != 0:
                         logging.error('Unable to oc get command, cannot check node status')
                         logging.error(nodecheck_stdout.strip().decode("utf-8"))
@@ -177,19 +183,20 @@ def _add_machinepool(rosa_cmnd, kubeconfig, cluster_id):
                         for line in nodecheck_stdout.splitlines():
                             ready_nodes += 1 if line.split()[1].decode() == "Ready" else None
                         if ready_nodes >= args.machinepool_replicas:
-                            logging.info('Machinepool %s is created and ready nodes count (%d) meet expected (%d)' % (args.machinepool_name,ready_nodes,args.machinepool_replicas))
+                            logging.info('Machinepool %s is created and ready nodes count (%d) meet expected (%d)' % (args.machinepool_name, ready_nodes, args.machinepool_replicas))
                             logging.debug(nodecheck_stdout.strip().decode("utf-8"))
                             logging.debug(nodecheck_stderr.strip().decode("utf-8"))
                             break
                         else:
-                            logging.debug('Ready nodes count: %d. Expected: %d' % (ready_nodes,args.machinepool_replicas))
-                            logging.debug('Waiting 5 seconds for next node check. (%d of %d)' % (counter,args.machinepool_wait_cycles))
+                            logging.debug('Ready nodes count: %d. Expected: %d' % (ready_nodes, args.machinepool_replicas))
+                            logging.debug('Waiting 5 seconds for next node check. (%d of %d)' % (counter, args.machinepool_wait_cycles))
                             time.sleep(5)
                 else:
-                    logging.error('Machinepool %s is created but ready nodes count (%d) do not meet expected (%d)' % (args.machinepool_name,ready_nodes,args.machinepool_replicas))
+                    logging.error('Machinepool %s is created but ready nodes count (%d) do not meet expected (%d)' % (args.machinepool_name, ready_nodes, args.machinepool_replicas))
                     logging.error(nodecheck_stdout.strip().decode("utf-8"))
                     logging.error(nodecheck_stderr.strip().decode("utf-8"))
                     return 1
+
 
 def _build_cluster(rosa_cmnd, cluster_name_seed, expiration, rosa_azs, my_path, es, index, my_uuid, my_inc, timestamp, index_retry, addons, es_ignored_metadata, rosa_flavour):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -202,7 +209,7 @@ def _build_cluster(rosa_cmnd, cluster_name_seed, expiration, rosa_azs, my_path, 
     logging.debug('Output directory set to %s' % cluster_path)
     cluster_name = cluster_name_seed + "-" + str(my_inc).zfill(4)
     metadata["cluster_name"] = cluster_name
-    cluster_cmd = [rosa_cmnd, "create","cluster", "--cluster-name", cluster_name, "-y", "--watch"]
+    cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, "-y", "--watch"]
     if rosa_azs:
         cluster_cmd.append('--multi-az')
         metadata["multiAZ"] = 'True'
@@ -218,14 +225,14 @@ def _build_cluster(rosa_cmnd, cluster_name_seed, expiration, rosa_azs, my_path, 
     installation_log = open(cluster_path + "/" + 'installation.log', 'w')
     process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log)
     logging.info('Started cluster %d' % my_inc)
-    stdout,stderr = process.communicate()
+    stdout, stderr = process.communicate()
     cluster_end_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     # Getting information to add it on metadata
     logging.info('Getting information for cluster %s' % cluster_name)
     metadata_cmd = [rosa_cmnd, "describe", "cluster", "-c", cluster_name]
     logging.debug(metadata_cmd)
-    metadata_process = subprocess.Popen(metadata_cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
-    stdout,stderr = metadata_process.communicate()
+    metadata_process = subprocess.Popen(metadata_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    stdout, stderr = metadata_process.communicate()
     for line in stdout.splitlines():
         if line.startswith('ID: '):
             metadata["cluster_id"] = line.split(':')[1].strip()
@@ -235,15 +242,15 @@ def _build_cluster(rosa_cmnd, cluster_name_seed, expiration, rosa_azs, my_path, 
             metadata["details_url"] = line.split(': ')[1].strip()
     if process.returncode != 0:
         logging.error('Failed to build cluster number %d' % my_inc)
-        with open(cluster_path + "/" + 'installation.log',"r") as output_file:
+        with open(cluster_path + "/" + 'installation.log', "r") as output_file:
             logging.error(output_file.read())
         success = False
     else:
         kubeconfig_path = _download_kubeconfig(metadata['cluster_id'], cluster_path)
-        _add_machinepool(rosa_cmnd,kubeconfig_path,metadata['cluster_id']) if args.machinepool_name else None
-        _install_addons(rosa_cmnd,metadata['cluster_id'], addons) if addons else None
+        _add_machinepool(rosa_cmnd, kubeconfig_path, metadata['cluster_id']) if args.machinepool_name else None
+        _install_addons(rosa_cmnd, metadata['cluster_id'], addons) if addons else None
     # extending cluster expiration on all clusters
-    _extend_cluster_expiration(rosa_cmnd,metadata['cluster_id'], expiration) if expiration else None
+    _extend_cluster_expiration(rosa_cmnd, metadata['cluster_id'], expiration) if expiration else None
     metadata["cluster_start_time"] = cluster_start_time
     metadata["cluster_end_time"] = cluster_end_time
     metadata["install_successful"] = success
@@ -257,7 +264,8 @@ def _build_cluster(rosa_cmnd, cluster_name_seed, expiration, rosa_azs, my_path, 
         logging.error('Failed to write metadata.json file located %s' % cluster_path)
     if es is not None:
         metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
+        common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
+
 
 def _watcher(rosa_cmnd, cluster_name_seed, cluster_count, delay, my_uuid, clusters_resume):
     time.sleep(30)
@@ -269,8 +277,8 @@ def _watcher(rosa_cmnd, cluster_name_seed, cluster_count, delay, my_uuid, cluste
     # To stop the watcher we expect the run attribute to be not True
     while getattr(my_thread, "run", True):
         logging.debug(cmd)
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,universal_newlines=True)
-        stdout,stderr = process.communicate()
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        stdout, stderr = process.communicate()
         current_cluster_count = 0
         state = {}
         error = []
@@ -282,7 +290,7 @@ def _watcher(rosa_cmnd, cluster_name_seed, cluster_count, delay, my_uuid, cluste
                 state[state_key] = state.get(state_key, 0) + 1
                 if state_key == "error":
                     error.append(line.split()[0])
-        logging.info('Requested Clusters for test %s: %d' % (my_uuid,cluster_count))
+        logging.info('Requested Clusters for test %s: %d' % (my_uuid, cluster_count))
         if current_cluster_count != 0:
             logging.debug(state.items())
             state_output = "Current clusters state: " + str(current_cluster_count) + " clusters"
@@ -296,13 +304,14 @@ def _watcher(rosa_cmnd, cluster_name_seed, cluster_count, delay, my_uuid, cluste
         time.sleep(delay)
     logging.info('Watcher exiting')
 
+
 def _cleanup_clusters(rosa_cmnd, cluster_name_seed):
     exit_status = 0
     logging.info('Starting cluster cleanup for %s' % cluster_name_seed)
     cmd = [rosa_cmnd, "list", "clusters"]
     logging.debug(cmd)
-    all_clusters = subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
-    stdout,stderr = all_clusters.communicate()
+    all_clusters = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    stdout, stderr = all_clusters.communicate()
     error = []
     logging.debug('Finding clusters for %s' % cluster_name_seed)
     for line in stdout.splitlines():
@@ -312,8 +321,8 @@ def _cleanup_clusters(rosa_cmnd, cluster_name_seed):
             if state != "error" and state != "uninstalling":
                 logging.debug('Deleting cluster id: %s' % cluster_id)
                 del_cmd = [rosa_cmnd, "delete", "cluster", "-c", cluster_id, "-y"]
-                process = subprocess.Popen(del_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,universal_newlines=True)
-                stdout,stderr = process.communicate()
+                process = subprocess.Popen(del_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+                stdout, stderr = process.communicate()
                 if process.returncode != 0:
                     logging.error('Cluster cleanup failed for cluster id %s with this stdout/stderr:' % cluster_id)
                     logging.error(stdout)
@@ -324,6 +333,7 @@ def _cleanup_clusters(rosa_cmnd, cluster_name_seed):
     logging.info('Clusters in error state. Not deleting:')
     logging.info(error)
     return exit_status
+
 
 def main():
     parser = argparse.ArgumentParser(description="osde2e wrapper script",
@@ -418,7 +428,7 @@ def main():
                 except Exception as err:
                     logging.error(err)
                     logging.error('Failed to load metadata.json file located %s' % metadata_file)
-                index_result += common._index_result(es,args.es_index,metadata,_es_ignored_metadata,args.es_index_retry)
+                index_result += common._index_result(es, args.es_index, metadata, _es_ignored_metadata, args.es_index_retry)
         else:
             logging.error('PATH and elastic related parameters required when uploading data to elastic')
             exit(1)
@@ -428,14 +438,14 @@ def main():
         try:
             logging.info('Reading cluster name seed from %s' % args.path)
             cluster_name_seed_file = open(args.path + '/cluster_name_seed')
-            cluster_name_seed = cluster_name_seed_file.read().replace("\n","")
+            cluster_name_seed = cluster_name_seed_file.read().replace("\n", "")
             logging.info('Found cluster name seed as: %s' % cluster_name_seed)
         except Exception as err:
             logging.error(err)
             logging.error('Failed to read %s/cluster_name_seed file' % args.path)
             exit(1)
-        rosa_cmnd = _verify_cmnd(args.rosa_cli,args.path)
-        cleanup_result = _cleanup_clusters(rosa_cmnd,cluster_name_seed)
+        rosa_cmnd = _verify_cmnd(args.rosa_cli, args.path)
+        cleanup_result = _cleanup_clusters(rosa_cmnd, cluster_name_seed)
         exit(cleanup_result)
 
     # global uuid to assign for the group of clusters created. each cluster will have its own cluster-id
@@ -452,7 +462,7 @@ def main():
 
     try:
         logging.debug('Saving test UUID to the working directory')
-        uuid_file = open(my_path + '/uuid','x')
+        uuid_file = open(my_path + '/uuid', 'x')
         uuid_file.write(my_uuid)
         uuid_file.close()
     except Exception as err:
@@ -464,7 +474,7 @@ def main():
 
     try:
         logging.debug('Saving cluster name seed %s to the working directory' % cluster_name_seed)
-        seed_file = open(my_path + '/cluster_name_seed','x')
+        seed_file = open(my_path + '/cluster_name_seed', 'x')
         seed_file.write(cluster_name_seed)
         seed_file.close()
     except Exception as err:
@@ -472,7 +482,7 @@ def main():
         logging.error(err)
         exit(1)
 
-    rosa_cmnd = _verify_cmnd(args.rosa_cli,my_path)
+    rosa_cmnd = _verify_cmnd(args.rosa_cli, my_path)
 
     logging.info('Attempting to log in OCM using `rosa login`')
     rosa_login_command = [rosa_cmnd, "login", "--token=" + args.rosa_token]
@@ -480,7 +490,7 @@ def main():
         rosa_login_command.append('--env=' + args.rosa_env)
     logging.debug(rosa_login_command)
     rosa_login_process = subprocess.Popen(rosa_login_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    rosa_login_stdout,rosa_login_stderr = rosa_login_process.communicate()
+    rosa_login_stdout, rosa_login_stderr = rosa_login_process.communicate()
     if rosa_login_process.returncode != 0:
         logging.error('%s unable to execute `rosa login`' % rosa_cmnd)
         logging.error(rosa_login_stderr.strip().decode("utf-8"))
@@ -499,7 +509,7 @@ def main():
             rosa_init_command.append('--env=' + args.rosa_env)
         logging.debug(rosa_init_command)
         rosa_init_process = subprocess.Popen(rosa_init_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        rosa_init_stdout,rosa_init_stderr = rosa_init_process.communicate()
+        rosa_init_stdout, rosa_init_stderr = rosa_init_process.communicate()
         if rosa_init_process.returncode != 0:
             logging.error('%s unable to execute `rosa init`' % rosa_cmnd)
             logging.error(rosa_init_stderr.strip().decode("utf-8"))
@@ -511,11 +521,11 @@ def main():
     # launch watcher thread to report status
     logging.info('Launching watcher thread')
     clusters_resume = {}
-    watcher = threading.Thread(target=_watcher,args=(rosa_cmnd,cluster_name_seed,args.cluster_count,args.watcher_delay,my_uuid,clusters_resume))
+    watcher = threading.Thread(target=_watcher, args=(rosa_cmnd, cluster_name_seed, args.cluster_count, args.watcher_delay, my_uuid, clusters_resume))
     watcher.daemon = True
     watcher.start()
 
-    logging.info('Attempting to start %d clusters with %d batch size' % (args.cluster_count,args.batch_size))
+    logging.info('Attempting to start %d clusters with %d batch size' % (args.cluster_count, args.batch_size))
     cluster_thread_list = []
     batch_count = 0
     loop_counter = 0
@@ -545,7 +555,7 @@ def main():
                 logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
                 try:
                     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    thread = threading.Thread(target=_build_cluster,args=(rosa_cmnd,cluster_name_seed,args.expire,args.rosa_azs,my_path,es,args.es_index,my_uuid,loop_counter,timestamp,args.es_index_retry,args.rosa_addons,_es_ignored_metadata,args.rosa_flavour))
+                    thread = threading.Thread(target=_build_cluster, args=(rosa_cmnd, cluster_name_seed, args.expire, args.rosa_azs, my_path, es, args.es_index, my_uuid, loop_counter, timestamp, args.es_index_retry, args.rosa_addons, _es_ignored_metadata, args.rosa_flavour))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
@@ -572,7 +582,7 @@ def main():
     watcher.join()
 
     if args.cleanup_clusters:
-        cleanup_result = _cleanup_clusters(rosa_cmnd,cluster_name_seed)
+        cleanup_result = _cleanup_clusters(rosa_cmnd, cluster_name_seed)
         logging.warning('Cleanup process failed') if cleanup_result != 0 else None
 
     if args.cleanup:
@@ -582,12 +592,12 @@ def main():
     logging.info('************************************************************************')
     logging.info('********* Summary for test %s *********' % (my_uuid))
     logging.info('************************************************************************')
-    logging.info('Requested Clusters for test %s: %d' % (my_uuid,args.cluster_count))
+    logging.info('Requested Clusters for test %s: %d' % (my_uuid, args.cluster_count))
     if 'clusters_created' in clusters_resume:
-        logging.info('Created   Clusters for test %s: %d' % (my_uuid,clusters_resume['clusters_created']))
+        logging.info('Created   Clusters for test %s: %d' % (my_uuid, clusters_resume['clusters_created']))
         if 'state' in clusters_resume:
             for i1 in clusters_resume['state'].items():
-                logging.info('              %s: %s' % (str(i1[0]),str(i1[1])))
+                logging.info('              %s: %s' % (str(i1[0]), str(i1[1])))
     else:
         logging.info('Created   Clusters for test %s: 0' % (my_uuid))
     logging.info('Batches size: %s' % (str(args.batch_size)))

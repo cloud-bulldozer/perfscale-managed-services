@@ -30,7 +30,7 @@ from ruamel.yaml import YAML
 
 # If osde2e command path is provided verify we can run the help function
 # If it is not provided git clone the osde2e repo, build it and validate as above
-def _verify_cmnd(osde2e_cmnd,my_path):
+def _verify_cmnd(osde2e_cmnd, my_path):
     osde2e_path = my_path + "/osde2e"
 
     # If the command path was not given, git clone and build
@@ -46,7 +46,7 @@ def _verify_cmnd(osde2e_cmnd,my_path):
         logging.info('Attempting to build osde2e via make build')
         cmd = ["make", "--directory", osde2e_path, "build"]
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout,stderr = process.communicate()
+        stdout, stderr = process.communicate()
         if process.returncode != 0:
             logging.error('Make build in directory %s failed with the following:' % osde2e_path)
             logging.error(stderr.strip().decode("utf-8"))
@@ -59,8 +59,8 @@ def _verify_cmnd(osde2e_cmnd,my_path):
     ctl_cmd = [osde2e_cmnd + "/osde2ectl", "-h"]
     osd_process = subprocess.Popen(osd_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     ctl_process = subprocess.Popen(ctl_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    osd_stdout,osd_stderr = osd_process.communicate()
-    ctl_stdout,ctl_stderr = ctl_process.communicate()
+    osd_stdout, osd_stderr = osd_process.communicate()
+    ctl_stdout, ctl_stderr = ctl_process.communicate()
     if osd_process.returncode != 0:
         logging.error('%s unable to execute -h' % osde2e_cmnd + "/osde2e")
         logging.error(stderr.strip().decode("utf-8"))
@@ -72,7 +72,8 @@ def _verify_cmnd(osde2e_cmnd,my_path):
     logging.info('osde2e and osde2ectl commands validated with -h. Directory is %s' % osde2e_cmnd)
     return osde2e_cmnd
 
-def _download_kubeconfig(osde2ectl_cmd,cluster_name,my_path):
+
+def _download_kubeconfig(osde2ectl_cmd, cluster_name, my_path):
     logging.debug('Attempting to load metadata json')
     try:
         metadata = json.load(open(my_path + "/metadata.json"))
@@ -82,24 +83,25 @@ def _download_kubeconfig(osde2ectl_cmd,cluster_name,my_path):
         return 1
     if 'cluster-id' in metadata and metadata['cluster-id'] != "":
         cluster_id = metadata['cluster-id']
-        logging.info('Downloading kubeconfig file for cluster %s on %s' % (cluster_id,my_path))
+        logging.info('Downloading kubeconfig file for cluster %s on %s' % (cluster_id, my_path))
         cmd = [osde2ectl_cmd, "--custom-config", "cluster_account.yaml", "get", "-k", "-i", cluster_id, "--kube-config-path", my_path]
         logging.debug(cmd)
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
-        stdout,stderr = process.communicate()
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
+        stdout, stderr = process.communicate()
         if process.returncode != 0:
             logging.error('Failed to download kubeconfig file for cluster id %s with this stdout/stderr:' % cluster_id)
             logging.error(stdout)
             logging.error(stderr)
         else:
-            logging.info('Downloaded kubeconfig file for cluster %s and stored at %s/%s-kubeconfig.txt' % (cluster_id, my_path,cluster_name))
+            logging.info('Downloaded kubeconfig file for cluster %s and stored at %s/%s-kubeconfig.txt' % (cluster_id, my_path, cluster_name))
             kubeconfig_file = my_path + "/" + cluster_name + "-" + "kubeconfig.txt"
             return kubeconfig_file
     else:
         logging.error('Failed to load cluster-id from metadata.json file located on %s, kubeconfig file wont be downloaded' % my_path)
         return 1
 
-def _add_machinepool(osde2ectl_cmd,kubeconfig,my_path):
+
+def _add_machinepool(osde2ectl_cmd, kubeconfig, my_path):
     try:
         metadata = json.load(open(my_path + "/metadata.json"))
     except Exception as err:
@@ -112,13 +114,13 @@ def _add_machinepool(osde2ectl_cmd,kubeconfig,my_path):
         ocm_cmd = ["ocm", "-h"]
         logging.debug(ocm_cmd)
         ocm_process = subprocess.Popen(ocm_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        ocm_stdout,ocm_stderr = ocm_process.communicate()
+        ocm_stdout, ocm_stderr = ocm_process.communicate()
         if ocm_process.returncode != 0:
             logging.error('%s unable to execute -h' % ocm_cmd)
             logging.error(ocm_stderr.strip().decode("utf-8"))
             return 1
         else:
-            logging.info('Creating machinepool %s on %s' % (args.machinepool_name,cluster_id))
+            logging.info('Creating machinepool %s on %s' % (args.machinepool_name, cluster_id))
             # ocm create machinepool --cluster=<your cluster ID> --labels="foo=bar,bar=baz" --replicas=3 --instance-type="m5.xlarge" mp-1
             machinepool_cmd = ["ocm", "create", "machinepool",
                                "--cluster", cluster_id,
@@ -129,20 +131,20 @@ def _add_machinepool(osde2ectl_cmd,kubeconfig,my_path):
                                args.machinepool_name]
             logging.debug(machinepool_cmd)
             machinepool_process = subprocess.Popen(machinepool_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            machinepool_stdout,machinepool_stderr = machinepool_process.communicate()
+            machinepool_stdout, machinepool_stderr = machinepool_process.communicate()
             if machinepool_process.returncode != 0:
-                logging.error('Unable to create machinepool %s on %s' % (args.machinepool_name,cluster_id))
+                logging.error('Unable to create machinepool %s on %s' % (args.machinepool_name, cluster_id))
                 logging.error(machinepool_stdout.strip().decode("utf-8"))
                 logging.error(machinepool_stderr.strip().decode("utf-8"))
                 return 1
             else:
                 if args.machinepool_wait:
-                    logging.info('Created machinepool %s on %s. Waiting up to %d seconds for hosts to come up' % (args.machinepool_name,cluster_id,args.machinepool_wait_cycles*5))
+                    logging.info('Created machinepool %s on %s. Waiting up to %d seconds for hosts to come up' % (args.machinepool_name, cluster_id, args.machinepool_wait_cycles * 5))
                     logging.info('Checking if oc tool is available on the system')
                     oc_cmd = ["oc", "-h"]
                     logging.debug(oc_cmd)
                     oc_process = subprocess.Popen(oc_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    oc_stdout,oc_stderr = oc_process.communicate()
+                    oc_stdout, oc_stderr = oc_process.communicate()
                     if oc_process.returncode != 0:
                         logging.error('%s unable to execute -h' % oc_cmd)
                         logging.error(oc_stdout.strip().decode("utf-8"))
@@ -152,13 +154,13 @@ def _add_machinepool(osde2ectl_cmd,kubeconfig,my_path):
                         kubeconfig_env = os.environ.copy()
                         kubeconfig_env["KUBECONFIG"] = kubeconfig
                         # 60 cicles, waiting 5 seconds at the end of each cicle, is about 300 seconds (5 minutes)
-                        for counter in range(1,args.machinepool_wait_cycles):
+                        for counter in range(1, args.machinepool_wait_cycles):
                             nodecheck_cmd = ["oc", "get", "nodes", "--no-headers=true",
                                              "-l", args.machinepool_labels,
                                              "-o", "custom-columns=NAME:metadata.name,STATUS:status.conditions[-1].type"]
                             logging.debug(nodecheck_cmd)
                             nodecheck_process = subprocess.Popen(nodecheck_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=kubeconfig_env)
-                            nodecheck_stdout,nodecheck_stderr = nodecheck_process.communicate()
+                            nodecheck_stdout, nodecheck_stderr = nodecheck_process.communicate()
                             if nodecheck_process.returncode != 0:
                                 logging.error('Unable to execute oc get command, cannot check node status')
                                 logging.error(nodecheck_stdout.strip().decode("utf-8"))
@@ -169,16 +171,16 @@ def _add_machinepool(osde2ectl_cmd,kubeconfig,my_path):
                                 for line in nodecheck_stdout.splitlines():
                                     ready_nodes += 1 if line.split()[1].decode() == "Ready" else None
                                 if ready_nodes >= args.machinepool_replicas:
-                                    logging.info('Machinepool %s is created and ready nodes count (%d) meet expected (%d)' % (args.machinepool_name,ready_nodes,args.machinepool_replicas))
+                                    logging.info('Machinepool %s is created and ready nodes count (%d) meet expected (%d)' % (args.machinepool_name, ready_nodes, args.machinepool_replicas))
                                     logging.debug(nodecheck_stdout.strip().decode("utf-8"))
                                     logging.debug(nodecheck_stderr.strip().decode("utf-8"))
                                     break
                                 else:
-                                    logging.debug('Ready nodes count: %d. Expected: %d' % (ready_nodes,args.machinepool_replicas))
-                                    logging.debug('Waiting 5 seconds for next node check. (%d of %d)' % (counter,args.machinepool_wait_cycles))
+                                    logging.debug('Ready nodes count: %d. Expected: %d' % (ready_nodes, args.machinepool_replicas))
+                                    logging.debug('Waiting 5 seconds for next node check. (%d of %d)' % (counter, args.machinepool_wait_cycles))
                                     time.sleep(5)
                         else:
-                            logging.error('Machinepool %s is created but ready nodes count (%d) do not meet expected (%d)' % (args.machinepool_name,ready_nodes,args.machinepool_replicas))
+                            logging.error('Machinepool %s is created but ready nodes count (%d) do not meet expected (%d)' % (args.machinepool_name, ready_nodes, args.machinepool_replicas))
                             logging.error(nodecheck_stdout.strip().decode("utf-8"))
                             logging.error(nodecheck_stderr.strip().decode("utf-8"))
                             return 1
@@ -186,7 +188,8 @@ def _add_machinepool(osde2ectl_cmd,kubeconfig,my_path):
         logging.error('Failed to load cluster-id from metadata.json file located on %s, machinepool %s wont be created' % (my_path, args.machinepool_name))
         return 1
 
-def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_uuid,my_inc,cluster_count,timestamp,dry_run,index_retry,skip_health_check,must_gather,es_ignored_metadata):
+
+def _build_cluster(osde2e_cmnd, osde2ectl_cmd, account_config, my_path, es, index, my_uuid, my_inc, cluster_count, timestamp, dry_run, index_retry, skip_health_check, must_gather, es_ignored_metadata):
     cluster_start_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = True
     # osde2e takes a relative path to the account file so we need to create it in a working dir and
@@ -198,14 +201,14 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
     yaml.explicit_start = False
     yaml.explicit_end = False
     yaml.allow_duplicate_keys = True
-    yaml.dump(account_config,open(cluster_path + "/cluster_account.yaml",'w'))
+    yaml.dump(account_config, open(cluster_path + "/cluster_account.yaml", 'w'))
     cluster_env = os.environ.copy()
     cluster_env["REPORT_DIR"] = cluster_path
     if "expiration" in account_config['ocm'].keys():
         cluster_env["CLUSTER_EXPIRY_IN_MINUTES"] = str(account_config['ocm']['expiration'])
     logging.debug('Attempting cluster installation')
     logging.debug('Output directory set to %s' % cluster_path)
-    cluster_cmd = [osde2e_cmnd, "test","--custom-config", "cluster_account.yaml"]
+    cluster_cmd = [osde2e_cmnd, "test", "--custom-config", "cluster_account.yaml"]
     cluster_cmd.append('--skip-health-check') if skip_health_check else None
     cluster_cmd.append('--must-gather=false') if not must_gather else None
     if args.wildcard_options:
@@ -215,11 +218,11 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
         logging.debug(cluster_cmd)
         installation_log = open(cluster_path + "/" + 'installation.log', 'w')
         process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log, env=cluster_env, cwd=cluster_path)
-        logging.info('Started cluster %s (%d of %d)' % (account_config['cluster']['name'],my_inc,cluster_count))
-        stdout,stderr = process.communicate()
+        logging.info('Started cluster %s (%d of %d)' % (account_config['cluster']['name'], my_inc, cluster_count))
+        stdout, stderr = process.communicate()
         cluster_end_time = time.strftime("%Y-%m-%dT%H:%M:%S")
         if process.returncode != 0:
-            logging.error('Failed to build cluster %d: %s' % (my_inc,account_config['cluster']['name']))
+            logging.error('Failed to build cluster %d: %s' % (my_inc, account_config['cluster']['name']))
             logging.error('Check installation.log and test_output.log files on %s for errors' % (cluster_path + "/"))
             success = False
         logging.debug('Attempting to load metadata json')
@@ -243,12 +246,13 @@ def _build_cluster(osde2e_cmnd,osde2ectl_cmd,account_config,my_path,es,index,my_
             logging.error(err)
             logging.error('Failed to write metadata.json file located %s' % cluster_path)
         kubeconfig_path = _download_kubeconfig(osde2ectl_cmd, account_config['cluster']['name'], cluster_path)
-        _add_machinepool(osde2ectl_cmd,kubeconfig_path,cluster_path) if args.machinepool_name else None
+        _add_machinepool(osde2ectl_cmd, kubeconfig_path, cluster_path) if args.machinepool_name else None
         if es is not None:
             metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-            common._index_result(es,index,metadata,es_ignored_metadata,index_retry)
+            common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
 
-def _watcher(osde2ectl_cmd,cluster_name_seed,account_config,my_path,cluster_count,delay,my_uuid):
+
+def _watcher(osde2ectl_cmd, cluster_name_seed, account_config, my_path, cluster_count, delay, my_uuid):
     logging.info('Watcher thread started')
     logging.info('Getting status every %d seconds' % int(delay))
     yaml = YAML(pure=True)
@@ -256,14 +260,14 @@ def _watcher(osde2ectl_cmd,cluster_name_seed,account_config,my_path,cluster_coun
     yaml.explicit_start = False
     yaml.explicit_end = False
     yaml.allow_duplicate_keys = True
-    yaml.dump(account_config,open(my_path + "/account_config.yaml",'w'))
+    yaml.dump(account_config, open(my_path + "/account_config.yaml", 'w'))
     my_thread = threading.currentThread()
     cmd = [osde2ectl_cmd, "list", "--custom-config", "account_config.yaml"]
     # To stop the watcher we expect the run attribute to be not True
     while getattr(my_thread, "run", True):
         logging.debug(cmd)
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
-        stdout,stderr = process.communicate()
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
+        stdout, stderr = process.communicate()
 
         current_cluster_count = 0
         state = {}
@@ -282,7 +286,7 @@ def _watcher(osde2ectl_cmd,cluster_name_seed,account_config,my_path,cluster_coun
                     error.append(line.split()[1])
                     logging.debug(line.split()[1])
 
-        logging.info('Requested Clusters for test %s: %d' % (my_uuid,cluster_count))
+        logging.info('Requested Clusters for test %s: %d' % (my_uuid, cluster_count))
         if current_cluster_count != 0:
             logging.debug(state.items())
             logging.debug(status.items())
@@ -302,12 +306,13 @@ def _watcher(osde2ectl_cmd,cluster_name_seed,account_config,my_path,cluster_coun
         time.sleep(delay)
     logging.info('Watcher exiting')
 
-def _cleanup_clusters(osde2ectl_cmd,cluster_name_seed,my_path,account_config):
+
+def _cleanup_clusters(osde2ectl_cmd, cluster_name_seed, my_path, account_config):
     logging.info('Starting cluster cleanup')
     exit_status = 0
     cmd = [osde2ectl_cmd, "list", "--custom-config", "account_config.yaml"]
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
-    stdout,stderr = process.communicate()
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
+    stdout, stderr = process.communicate()
     error = []
     for line in stdout.splitlines():
         if cluster_name_seed in line:
@@ -316,8 +321,8 @@ def _cleanup_clusters(osde2ectl_cmd,cluster_name_seed,my_path,account_config):
             if state != "error" and state != "uninstalling":
                 logging.debug('Deleting cluster id: %s' % cluster_id)
                 del_cmd = [osde2ectl_cmd, "--custom-config", "account_config.yaml", "delete", "-i", cluster_id]
-                process = subprocess.Popen(del_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,cwd=my_path,universal_newlines=True)
-                stdout,stderr = process.communicate()
+                process = subprocess.Popen(del_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
+                stdout, stderr = process.communicate()
                 if process.returncode != 0:
                     logging.error('Cluster cleanup failed for cluster id %s with this stdout/stderr:' % cluster_id)
                     logging.error(stdout)
@@ -328,6 +333,7 @@ def _cleanup_clusters(osde2ectl_cmd,cluster_name_seed,my_path,account_config):
     logging.info('Clusters in error state. Not deleting:')
     logging.info(error)
     return exit_status
+
 
 def main():
     parser = argparse.ArgumentParser(description="osde2e wrapper script",
@@ -415,7 +421,7 @@ def main():
                 except Exception as err:
                     logging.error(err)
                     logging.error('Failed to load metadata.json file located %s' % metadata_file)
-                index_result += common._index_result(es,args.es_index,metadata,_es_ignored_metadata,args.es_index_retry)
+                index_result += common._index_result(es, args.es_index, metadata, _es_ignored_metadata, args.es_index_retry)
         else:
             logging.error('PATH and elastic related parameters required when uploading data to elastic')
             exit(1)
@@ -425,7 +431,7 @@ def main():
         try:
             logging.info('Reading cluster name seed from %s' % args.path)
             cluster_name_seed_file = open(args.path + '/cluster_name_seed')
-            cluster_name_seed = cluster_name_seed_file.read().replace("\n","")
+            cluster_name_seed = cluster_name_seed_file.read().replace("\n", "")
             logging.info('Found cluster name seed as: %s' % cluster_name_seed)
         except Exception as err:
             logging.error(err)
@@ -438,8 +444,8 @@ def main():
             logging.error(err)
             logging.error('Failed to load account configuration yaml')
             exit(1)
-        cmnd_path = _verify_cmnd(args.command,args.path)
-        cleanup_result = _cleanup_clusters(cmnd_path + "/osde2ectl",cluster_name_seed,args.path,account_config)
+        cmnd_path = _verify_cmnd(args.command, args.path)
+        cleanup_result = _cleanup_clusters(cmnd_path + "/osde2ectl", cluster_name_seed, args.path, account_config)
         exit(cleanup_result)
 
     # global uuid to assign for the group of clusters created. each cluster will have its own cluster-id
@@ -462,7 +468,7 @@ def main():
 
     try:
         logging.debug('Saving test UUID to the working directory')
-        uuid_file = open(my_path + '/uuid','x')
+        uuid_file = open(my_path + '/uuid', 'x')
         uuid_file.write(my_uuid)
         uuid_file.close()
     except Exception as err:
@@ -491,7 +497,7 @@ def main():
 
     try:
         logging.debug('Saving cluster name seed %s to the working directory' % cluster_name_seed)
-        seed_file = open(my_path + '/cluster_name_seed','x')
+        seed_file = open(my_path + '/cluster_name_seed', 'x')
         seed_file.write(cluster_name_seed)
         seed_file.close()
     except Exception as err:
@@ -511,15 +517,15 @@ def main():
         account_config['ocm']['expiration'] = args.expire
         logging.info('Setting cluster expiration time to: %d' % args.expire)
 
-    cmnd_path = _verify_cmnd(args.command,my_path) if not args.dry_run else ""
+    cmnd_path = _verify_cmnd(args.command, my_path) if not args.dry_run else ""
 
     # launch watcher thread to report status
     if not args.dry_run:
         logging.info('Launching watcher thread')
-        watcher = threading.Thread(target=_watcher,args=(cmnd_path + "/osde2ectl",cluster_name_seed,account_config,my_path,args.cluster_count,args.watcher_delay,my_uuid))
+        watcher = threading.Thread(target=_watcher, args=(cmnd_path + "/osde2ectl", cluster_name_seed, account_config, my_path, args.cluster_count, args.watcher_delay, my_uuid))
         watcher.daemon = True
         watcher.start()
-        logging.info('Attempting to start %d clusters with %d batch size' % (args.cluster_count,args.batch_size))
+        logging.info('Attempting to start %d clusters with %d batch size' % (args.cluster_count, args.batch_size))
     else:
         logging.info('Dry-run: Watcher thread not started')
 
@@ -585,10 +591,10 @@ def main():
                 if "cluster" not in my_cluster_config.keys() or my_cluster_config['cluster'] is None:
                     my_cluster_config['cluster'] = {}
                 my_cluster_config['cluster']['name'] = cluster_name_seed + "-" + str(loop_counter).zfill(4)
-                logging.debug('Starting Cluster thread %d for cluster %s' % (loop_counter + 1,my_cluster_config['cluster']['name']))
+                logging.debug('Starting Cluster thread %d for cluster %s' % (loop_counter + 1, my_cluster_config['cluster']['name']))
                 try:
                     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    thread = threading.Thread(target=_build_cluster,args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config,my_path,es,args.es_index,my_uuid,loop_counter,args.cluster_count,timestamp,args.dry_run,args.es_index_retry,args.skip_health_check,args.osde2e_must_gather,_es_ignored_metadata))
+                    thread = threading.Thread(target=_build_cluster, args=(cmnd_path + "/osde2e", cmnd_path + "/osde2ectl", my_cluster_config, my_path, es, args.es_index, my_uuid, loop_counter, args.cluster_count, timestamp, args.dry_run, args.es_index_retry, args.skip_health_check, args.osde2e_must_gather, _es_ignored_metadata))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
@@ -617,7 +623,7 @@ def main():
         watcher.join()
 
     if args.cleanup_clusters and not args.dry_run:
-        cleanup_result = _cleanup_clusters(cmnd_path + "/osde2ectl",cluster_name_seed,my_path,account_config)
+        cleanup_result = _cleanup_clusters(cmnd_path + "/osde2ectl", cluster_name_seed, my_path, account_config)
         logging.warning('Cleanup process failed') if cleanup_result != 0 else None
 
     if args.cleanup:
@@ -628,12 +634,12 @@ def main():
         logging.info('************************************************************************')
         logging.info('********* Summary for test %s *********' % (my_uuid))
         logging.info('************************************************************************')
-        logging.info('Requested Clusters for test %s: %d' % (my_uuid,args.cluster_count))
+        logging.info('Requested Clusters for test %s: %d' % (my_uuid, args.cluster_count))
         if 'clusters_created' in account_config:
-            logging.info('Created   Clusters for test %s: %d' % (my_uuid,account_config['clusters_created']))
+            logging.info('Created   Clusters for test %s: %d' % (my_uuid, account_config['clusters_created']))
             if 'state' in account_config:
                 for i1 in account_config['state'].items():
-                    logging.info('              %s: %s' % (str(i1[0]),str(i1[1])))
+                    logging.info('              %s: %s' % (str(i1[0]), str(i1[1])))
         else:
             logging.info('Created   Clusters for test %s: 0' % (my_uuid))
         logging.info('Batches size: %s' % (str(args.batch_size)))
