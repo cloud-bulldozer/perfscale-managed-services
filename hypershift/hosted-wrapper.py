@@ -196,6 +196,7 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
     if cluster_load:
         logging.info('Executing e2e-benchmarking to add load on the cluster %s with %s nodes during %s with %d iterations' % (cluster_name, str(worker_nodes), load_duration, job_iterations))
         _cluster_load(kubeconfig_location, my_path, cluster_name, load_duration, job_iterations, es_url, mgmt_cluster_name)
+        logging.info('Finished execution of e2e-benchmarking workload on %s' % cluster_name)
 
 
 def _cluster_load(kubeconfig, my_path, hosted_cluster_name, load_duration, jobs, es_url, mgmt_cluster_name):
@@ -238,6 +239,7 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, load_duration, jobs,
     load_env["THANOS_RECEIVER_URL"] = "http://thanos.apps.observability.perfscale.devcluster.openshift.com/api/v1/receive"
     load_env["LOG_LEVEL"] = "debug"
     load_env["WORKLOAD"] = "cluster-density-ms"
+    load_env["KUBE_DIR"] = my_path + "/" + hosted_cluster_name
     load_command = ["./run.sh"]
     logging.debug(load_command)
     load_log = open(my_path + "/" + hosted_cluster_name + '/cluster_load.log', 'w')
