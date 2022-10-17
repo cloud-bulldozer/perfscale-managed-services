@@ -165,7 +165,7 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
     logging.debug('Attempting cluster installation')
     logging.debug('Output directory set to %s' % cluster_path)
     cluster_name = cluster_name_seed + "-" + str(my_inc).zfill(4)
-    cluster_cmd = [hypershift_cmnd, "create", "cluster", "aws", "--name", cluster_name, "--base-domain", mgmt_cluster_base_domain, "--additional-tags", "mgmt-cluster=" + mgmt_cluster_name, "--aws-creds", my_path + '/aws_creds', "--pull-secret", pull_secret_file, "--region", mgmt_cluster_aws_zone, "--node-pool-replicas", str(worker_nodes), '--wait']
+    cluster_cmd = [hypershift_cmnd, "create", "cluster", "aws", "--name", cluster_name, "--base-domain", mgmt_cluster_base_domain, "--additional-tags", "mgmt-cluster=" + mgmt_cluster_name, "--aws-creds", my_path + '/aws_creds', "--pull-secret", pull_secret_file, "--region", mgmt_cluster_aws_zone, "--node-pool-replicas", str(worker_nodes), '--wait', '--timeout', '1h']
     if args.wildcard_options:
         for param in args.wildcard_options.split():
             cluster_cmd.append(param)
