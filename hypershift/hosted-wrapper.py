@@ -156,7 +156,7 @@ def _download_kubeconfig(ocm_cmnd, mgmt_cluster_id, my_path):
         return kubeconfig_path
 
 
-def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt_cluster_base_domain, cluster_load, load_duration, job_iterations, worker_nodes, mgmt_cluster_aws_zone, pull_secret_file, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_cluster_name):
+def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt_cluster_base_domain, cluster_load, load_duration, job_iterations, worker_nodes, mgmt_cluster_aws_zone, pull_secret_file, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_cluster_name, all_clusters_installed):
     myenv = os.environ.copy()
     myenv["KUBECONFIG"] = kubeconfig_location
     # pass that dir as the cwd to subproccess
@@ -165,7 +165,7 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
     logging.debug('Attempting cluster installation')
     logging.debug('Output directory set to %s' % cluster_path)
     cluster_name = cluster_name_seed + "-" + str(my_inc).zfill(4)
-    cluster_cmd = [hypershift_cmnd, "create", "cluster", "aws", "--name", cluster_name, "--base-domain", mgmt_cluster_base_domain, "--additional-tags", "mgmt-cluster=" + mgmt_cluster_name, "--aws-creds", my_path + '/aws_creds', "--pull-secret", pull_secret_file, "--region", mgmt_cluster_aws_zone, "--node-pool-replicas", str(worker_nodes), '--wait', '--timeout', '1h']
+    cluster_cmd = [hypershift_cmnd, "create", "cluster", "aws", "--name", cluster_name, "--base-domain", mgmt_cluster_base_domain, "--additional-tags", "mgmt-cluster=" + mgmt_cluster_name, "--aws-creds", my_path + '/aws_creds', "--pull-secret", pull_secret_file, "--region", mgmt_cluster_aws_zone, "--node-pool-replicas", str(worker_nodes), '--wait', '--timeout', '30m']
     if args.wildcard_options:
         for param in args.wildcard_options.split():
             cluster_cmd.append(param)
@@ -188,15 +188,27 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
     metadata['job_iterations'] = str(job_iterations) if cluster_load else 0
     metadata['load_duration'] = load_duration if cluster_load else ""
     metadata['workers'] = str(worker_nodes)
-    if es is not None:
-        # metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
-        es_ignored_metadata = ""
-        common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
-    if cluster_load:
-        logging.info('Executing e2e-benchmarking to add load on the cluster %s with %s nodes during %s with %d iterations' % (cluster_name, str(worker_nodes), load_duration, job_iterations))
-        _cluster_load(kubeconfig_location, my_path, cluster_name, load_duration, job_iterations, es_url, mgmt_cluster_name)
-        logging.info('Finished execution of e2e-benchmarking workload on %s' % cluster_name)
+    if process.returncode == 0:
+        if es is not None:
+            metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
+            es_ignored_metadata = ""
+            common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
+        if cluster_load:
+            with all_clusters_installed:
+                logging.info('Waiting for all clusters to be installed to start e2e-benchmarking execution on %s' % cluster_name)
+                all_clusters_installed.wait()
+            logging.info('Executing e2e-benchmarking to add load on the cluster %s with %s nodes during %s with %d iterations' % (cluster_name, str(worker_nodes), load_duration, job_iterations))
+            _cluster_load(kubeconfig_location, my_path, cluster_name, load_duration, job_iterations, es_url, mgmt_cluster_name)
+            logging.info('Finished execution of e2e-benchmarking workload on %s' % cluster_name)
+    else:
+        if es is not None:
+            metadata['status'] = "Not Installed"
+            metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
+            es_ignored_metadata = ""
+            common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
+        logging.error("Hypershift installation failed for cluster %s" % cluster_name)
+        logging.error(stdout)
+        logging.error(stderr)
 
 
 def _cluster_load(kubeconfig, my_path, hosted_cluster_name, load_duration, jobs, es_url, mgmt_cluster_name):
@@ -256,59 +268,72 @@ def get_metadata(kubeconfig, my_path, duration, cluster_name, uuid, operation):
     logging.debug(metadata_hosted)
     metadata_hosted_process = subprocess.Popen(metadata_hosted, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
     metadata_hosted_stdout, metadata_hosted_stderr = metadata_hosted_process.communicate()
-    metadata_hosted_info = json.loads(metadata_hosted_stdout)
-    metadata["cluster_name"] = metadata_hosted_info['metadata']['name']
+    try:
+        metadata_hosted_info = json.loads(metadata_hosted_stdout)
+        metadata["cluster_name"] = metadata_hosted_info['metadata']['name']
+        metadata["network_type"] = metadata_hosted_info['spec']['networking']['networkType']
+        metadata["control_plane_topology"] = metadata_hosted_info['spec']['controllerAvailabilityPolicy']
+        metadata["infrastructure_topology"] = metadata_hosted_info['spec']['infrastructureAvailabilityPolicy']
+        metadata["status"] = metadata_hosted_info['status']['version']['history'][0]['state']
+        metadata["version"] = metadata_hosted_info['status']['version']['history'][0]['version']
+    except Exception as err:
+        logging.error("Cannot load metadata for cluster %s" % cluster_name)
+        logging.error(err)
     metadata["duration"] = duration
-    metadata["network_type"] = metadata_hosted_info['spec']['networking']['networkType']
-    metadata["control_plane_topology"] = metadata_hosted_info['spec']['controllerAvailabilityPolicy']
-    metadata["infrastructure_topology"] = metadata_hosted_info['spec']['infrastructureAvailabilityPolicy']
-    metadata["status"] = metadata_hosted_info['status']['version']['history'][0]['state']
-    metadata["version"] = metadata_hosted_info['status']['version']['history'][0]['version']
     metadata["operation"] = operation
     metadata["uuid"] = uuid
     return metadata
 
 
-def _watcher(kubeconfig_location, cluster_name_seed, cluster_count, delay, my_uuid, clusters_resume):
+def _watcher(kubeconfig_location, cluster_name_seed, cluster_count, delay, my_uuid, clusters_resume, all_clusters_installed):
     myenv = os.environ.copy()
     myenv["KUBECONFIG"] = kubeconfig_location
     time.sleep(60)
     logging.info('Watcher thread started')
     logging.info('Getting status every %d seconds' % int(delay))
-    my_thread = threading.current_thread()
     # We need to determine somewhere the number of clusters to show
-    cmd = ["oc", "get", "hostedclusters", "-n", "clusters"]
+    cmd = ["oc", "get", "hostedclusters", "-n", "clusters", "-o", "json"]
     # To stop the watcher we expect the run attribute to be not True
-    while getattr(my_thread, "run", True):
+    while True:
         logging.debug(cmd)
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
         stdout, stderr = process.communicate()
-        current_cluster_count = 0
-        state = {}
-        error = []
-        # Count the various states/status' and report it to logging
-        for line in stdout.splitlines():
-            if cluster_name_seed in line:
-                if len(line.split()) >= 3:
-                    current_cluster_count += 1
-                    state_key = line.split()[3] if 'Completed' in line else line.split()[2]
-                    state[state_key] = state.get(state_key, 0) + 1
-                    # Not sure about the error state key
-                    if state_key == "error":
-                        error.append(line.split()[0])
-
-        logging.info('Requested Clusters for test %s: %d' % (my_uuid, cluster_count))
-        if current_cluster_count != 0:
-            logging.debug(state.items())
-            state_output = "Current clusters state: " + str(current_cluster_count) + " clusters"
-            for i in state.items():
-                state_output += " (" + str(i[0]) + ": " + str(i[1]) + ")"
-            logging.info(state_output)
-            if error:
-                logging.warning('Clusters in error state: %s' % error)
-            clusters_resume['state'] = state
-            clusters_resume['clusters_created'] = current_cluster_count
-        time.sleep(delay)
+        installing_clusters = 0
+        installed_clusters = 0
+        other_clusters = 0
+        other_list = []
+        try:
+            clusters = json.loads(stdout)['items']
+        except ValueError as err:
+            logging.error("Failed to get hosted clusters list: %s" % err)
+            logging.error(stdout)
+            logging.error(stderr)
+            clusters = {}
+        for cluster in clusters:
+            if 'metadata' in cluster and 'name' in cluster['metadata'] and cluster_name_seed in cluster['metadata']['name']:
+                status = cluster['status']['version']['history'][0] if 'status' in cluster and 'version' in cluster['status'] and 'history' in cluster['status']['version'] and len(cluster['status']['version']['history'][0]) > 0 else {}
+                if 'state' in status and status['state'] == 'Completed':
+                    installed_clusters += 1
+                elif 'state' in status and status['state'] == 'Partial':
+                    installing_clusters += 1
+                else:
+                    other_clusters += 1
+                    other_list.append(cluster['metadata']['name'])
+        logging.info('Requested Clusters for test %s: %d of %d' % (my_uuid, installing_clusters + installed_clusters + other_clusters, cluster_count))
+        logging.info('   Installing: %d' % installing_clusters)
+        logging.info('   Ready: %d' % installed_clusters)
+        logging.info('   Other: %d (%s)' % (other_clusters, other_list))
+        if installed_clusters == cluster_count:
+            with all_clusters_installed:
+                logging.info('All requested clusters on ready status, notifying threads to start e2e-benchmarking processes')
+                all_clusters_installed.notify_all()
+            break
+        elif installed_clusters + other_clusters == cluster_count and installing_clusters == 0:
+            logging.error('No cluster pending to install and not all clusters are ready. Exiting...')
+            exit(1)
+        else:
+            logging.info("Waiting %d seconds for next watcher run" % delay)
+            time.sleep(delay)
     logging.info('Watcher exiting')
 
 
@@ -584,7 +609,8 @@ def main():
     # launch watcher thread to report status
     logging.info('Launching watcher thread')
     clusters_resume = {}
-    watcher = threading.Thread(target=_watcher, args=(hypershift_cmnd, cluster_name_seed, args.cluster_count, args.watcher_delay, my_uuid, clusters_resume))
+    all_clusters_installed = threading.Condition()
+    watcher = threading.Thread(target=_watcher, args=(mgmt_kubeconfig_path, cluster_name_seed, args.cluster_count, args.watcher_delay, my_uuid, clusters_resume, all_clusters_installed))
     watcher.daemon = True
     watcher.start()
 
@@ -633,7 +659,7 @@ def main():
                     workers = 0
                     jobs = 0
                 try:
-                    thread = threading.Thread(target=_build_cluster, args=(hypershift_cmnd, mgmt_kubeconfig_path, cluster_name_seed, mgmt_metadata['base_domain'], args.add_cluster_load, args.cluster_load_duration, jobs, workers, mgmt_metadata['aws_region'], args.pull_secret_file, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_metadata["cluster_name"]))
+                    thread = threading.Thread(target=_build_cluster, args=(hypershift_cmnd, mgmt_kubeconfig_path, cluster_name_seed, mgmt_metadata['base_domain'], args.add_cluster_load, args.cluster_load_duration, jobs, workers, mgmt_metadata['aws_region'], args.pull_secret_file, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_metadata["cluster_name"], all_clusters_installed))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
@@ -644,8 +670,11 @@ def main():
         logging.error(err)
         logging.error('Thread creation failed')
 
+    logging.info('All clusters (%d) requested. Waiting for installations to finish' % len(cluster_thread_list))
+    watcher.join()
+
     # Wait for active threads to finish
-    logging.info('All clusters (%d) requested. Waiting for them to finish' % len(cluster_thread_list))
+    logging.info('Waiting for  all threads (%d) to finish' % len(cluster_thread_list))
     for t in cluster_thread_list:
         try:
             t.join()
@@ -655,9 +684,6 @@ def main():
                 continue
             else:
                 raise
-
-    watcher.run = False
-    watcher.join()
 
     if args.cleanup_clusters:
         logging.info('Attempting to delete all hosted clusters with seed %s' % (cluster_name_seed))
