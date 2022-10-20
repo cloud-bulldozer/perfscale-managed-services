@@ -326,6 +326,8 @@ def _watcher(kubeconfig_location, cluster_name_seed, cluster_count, delay, my_uu
         if installed_clusters == cluster_count:
             with all_clusters_installed:
                 logging.info('All requested clusters on ready status, notifying threads to start e2e-benchmarking processes')
+                logging.info('Waiting 60 extra seconds to allow all cluster installations to finish')
+                time.sleep(60)
                 all_clusters_installed.notify_all()
             break
         elif installed_clusters + other_clusters == cluster_count and installing_clusters == 0:
