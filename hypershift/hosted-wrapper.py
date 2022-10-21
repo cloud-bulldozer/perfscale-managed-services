@@ -32,6 +32,7 @@ import threading
 from git import Repo
 from libs import common
 from libs import parentParsers
+from random import randrange
 
 
 def _verify_cmnds(ocm_cmnd, hypershift_cmnd, my_path, ocm_version, hypershift_version):
@@ -251,6 +252,7 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, load_duration, jobs,
     load_env["THANOS_RECEIVER_URL"] = "http://thanos.apps.observability.perfscale.devcluster.openshift.com/api/v1/receive"
     load_env["LOG_LEVEL"] = "debug"
     load_env["WORKLOAD"] = "cluster-density-ms"
+    load_env["SCRAPE_PAUSE"] = str(randrange(100, 1000)) + "s"
     load_env["KUBE_DIR"] = my_path + "/" + hosted_cluster_name
     load_command = ["./run.sh"]
     logging.debug(load_command)
