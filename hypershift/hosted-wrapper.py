@@ -252,7 +252,7 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, load_duration, jobs,
     load_env["THANOS_RECEIVER_URL"] = "http://thanos.apps.observability.perfscale.devcluster.openshift.com/api/v1/receive"
     load_env["LOG_LEVEL"] = "debug"
     load_env["WORKLOAD"] = "cluster-density-ms"
-    load_env["SCRAPE_PAUSE"] = str(randrange(100, 1000)) + "s"
+    load_env["JOB_PAUSE"] = str(randrange(100, 1000)) + "s"
     load_env["KUBE_DIR"] = my_path + "/" + hosted_cluster_name
     load_command = ["./run.sh"]
     logging.debug(load_command)
