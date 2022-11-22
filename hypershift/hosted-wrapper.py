@@ -111,6 +111,7 @@ def _verify_cmnds(ocm_cmnd, hypershift_cmnd, my_path, ocm_version, hypershift_ve
 def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster, es, index, index_retry, uuid, hostedclusters):
     logging.info('Getting Management Cluster Information from %s' % mgmt_cluster)
     ocm_command = [ocm_cmnd, "get", "/api/clusters_mgmt/v1/clusters"]
+    logging.debug(ocm_command)
     ocm_process = subprocess.Popen(ocm_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     ocm_stdout, ocm_stderr = ocm_process.communicate()
     if ocm_process.returncode != 0:
@@ -185,6 +186,7 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
     except Exception as err:
         logging.error(err)
         logging.error('Failed to write metadata_install.json file located %s' % cluster_path)
+    metadata['cluster_name'] = cluster_name
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
     metadata['job_iterations'] = str(job_iterations) if cluster_load else 0
     metadata['load_duration'] = load_duration if cluster_load else ""
@@ -272,7 +274,6 @@ def get_metadata(kubeconfig, my_path, duration, cluster_name, uuid, operation):
     metadata_hosted_stdout, metadata_hosted_stderr = metadata_hosted_process.communicate()
     try:
         metadata_hosted_info = json.loads(metadata_hosted_stdout)
-        metadata["cluster_name"] = metadata_hosted_info['metadata']['name']
         metadata["network_type"] = metadata_hosted_info['spec']['networking']['networkType']
         metadata["control_plane_topology"] = metadata_hosted_info['spec']['controllerAvailabilityPolicy']
         metadata["infrastructure_topology"] = metadata_hosted_info['spec']['infrastructureAvailabilityPolicy']
@@ -355,6 +356,7 @@ def _cleanup_cluster(hypershift_cmnd, kubeconfig, mgmt_cluster_name, cluster_nam
     stdout, stderr = process.communicate()
     cluster_end_time = int(time.time())
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
+    metadata['cluster_name'] = cluster_name
     metadata['duration'] = cluster_end_time - cluster_start_time
     metadata['job_iterations'] = ""
     metadata['load_duration'] = ""
@@ -648,19 +650,18 @@ def main():
                 logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
                 pattern = re.compile(r"^(\d+)(,\s*\d+)*$")
                 if args.workers.isdigit():
-                    workers = args.workers
+                    workers = int(args.workers)
                 elif bool(pattern.match(args.workers)):
                     workers = int(args.workers.split(",")[(loop_counter - 1) % len(args.workers.split(","))])
-                    if args.add_cluster_load:
-                        low_jobs = int((args.cluster_load_jobs_per_worker * workers) - (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100))
-                        high_jobs = int((args.cluster_load_jobs_per_worker * workers) + (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100))
-                        jobs = random.randint(low_jobs, high_jobs)
-                        logging.debug("Selected jobs: %d" % jobs)
-                    else:
-                        jobs = 0
                 else:
                     logging.error("Invalid value for parameter --workers %s. Setting workers to 0" % args.workers)
                     workers = 0
+                if args.add_cluster_load:
+                    low_jobs = int((args.cluster_load_jobs_per_worker * workers) - (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100))
+                    high_jobs = int((args.cluster_load_jobs_per_worker * workers) + (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100))
+                    jobs = random.randint(low_jobs, high_jobs)
+                    logging.debug("Selected jobs: %d" % jobs)
+                else:
                     jobs = 0
                 try:
                     thread = threading.Thread(target=_build_cluster, args=(hypershift_cmnd, mgmt_kubeconfig_path, cluster_name_seed, mgmt_metadata['base_domain'], args.add_cluster_load, args.cluster_load_duration, jobs, workers, mgmt_metadata['aws_region'], args.pull_secret_file, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_metadata["cluster_name"], all_clusters_installed))
