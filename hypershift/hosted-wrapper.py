@@ -111,6 +111,7 @@ def _verify_cmnds(ocm_cmnd, hypershift_cmnd, my_path, ocm_version, hypershift_ve
 def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster, es, index, index_retry, uuid, hostedclusters):
     logging.info('Getting Management Cluster Information from %s' % mgmt_cluster)
     ocm_command = [ocm_cmnd, "get", "/api/clusters_mgmt/v1/clusters"]
+    logging.debug(ocm_command)
     ocm_process = subprocess.Popen(ocm_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     ocm_stdout, ocm_stderr = ocm_process.communicate()
     if ocm_process.returncode != 0:
@@ -157,7 +158,7 @@ def _download_kubeconfig(ocm_cmnd, mgmt_cluster_id, my_path):
         return kubeconfig_path
 
 
-def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt_cluster_base_domain, cluster_load, load_duration, job_iterations, worker_nodes, mgmt_cluster_aws_zone, pull_secret_file, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_cluster_name, all_clusters_installed):
+def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt_cluster_base_domain, must_gather_all, cluster_load, load_duration, job_iterations, worker_nodes, mgmt_cluster_aws_zone, pull_secret_file, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_cluster_name, all_clusters_installed):
     myenv = os.environ.copy()
     myenv["KUBECONFIG"] = kubeconfig_location
     # pass that dir as the cwd to subproccess
@@ -185,11 +186,27 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
     except Exception as err:
         logging.error(err)
         logging.error('Failed to write metadata_install.json file located %s' % cluster_path)
+    metadata['cluster_name'] = cluster_name
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
     metadata['job_iterations'] = str(job_iterations) if cluster_load else 0
     metadata['load_duration'] = load_duration if cluster_load else ""
     metadata['workers'] = str(worker_nodes)
     if process.returncode == 0:
+        logging.info('Getting kubeconfig for hosted cluster %s' % cluster_name)
+        kubeconfig_hosted = ["oc", "get", "secret", cluster_name + "-admin-kubeconfig", "-o", "json", "-n", "clusters"]
+        logging.debug(kubeconfig_hosted)
+        kubeconfig_hosted_process = subprocess.Popen(kubeconfig_hosted, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+        kubeconfig_hosted_stdout, kubeconfig_hosted_stderr = kubeconfig_hosted_process.communicate()
+        kubeconfig_hosted_content = base64.b64decode(json.loads(kubeconfig_hosted_stdout)['data']['kubeconfig']).decode('ascii')
+        try:
+            logging.debug('Saving kubeconfig file of %s to the working directory' % cluster_name)
+            seed_file = open(my_path + "/" + cluster_name + "/kubeconfig", 'x')
+            seed_file.write(kubeconfig_hosted_content)
+            seed_file.close()
+        except Exception as err:
+            logging.debug('Cannot write file %s/%s/kubeconfig' % (my_path, cluster_name))
+            logging.error(err)
+            return 1
         if es is not None:
             metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
             es_ignored_metadata = ""
@@ -199,7 +216,7 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
                 logging.info('Waiting for all clusters to be installed to start e2e-benchmarking execution on %s' % cluster_name)
                 all_clusters_installed.wait()
             logging.info('Executing e2e-benchmarking to add load on the cluster %s with %s nodes during %s with %d iterations' % (cluster_name, str(worker_nodes), load_duration, job_iterations))
-            _cluster_load(kubeconfig_location, my_path, cluster_name, load_duration, job_iterations, es_url, mgmt_cluster_name)
+            _cluster_load(my_path, cluster_name, load_duration, job_iterations, es_url, mgmt_cluster_name)
             logging.info('Finished execution of e2e-benchmarking workload on %s' % cluster_name)
     else:
         if es is not None:
@@ -210,26 +227,17 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
         logging.error("Hypershift installation failed for cluster %s" % cluster_name)
         logging.error(stdout)
         logging.error(stderr)
+    if must_gather_all or process.returncode != 0:
+        random_sleep = random.randint(60,300)
+        logging.info("Waiting %d seconds before dumping hosted cluster must-gather" % random_sleep)
+        time.sleep(random_sleep)
+        # logging.info("Saving must-gather file of hosted cluster %s" % cluster_name)
+        # _get_must_gather(my_path, cluster_name)
+        logging.info("Saving hypershift dump of hosted cluster %s" % cluster_name)
+        _get_dump_cluster(kubeconfig_location, hypershift_cmnd, cluster_path, cluster_name)
 
 
-def _cluster_load(kubeconfig, my_path, hosted_cluster_name, load_duration, jobs, es_url, mgmt_cluster_name):
-    myenv = os.environ.copy()
-    myenv["KUBECONFIG"] = kubeconfig
-    logging.info('Getting kubeconfig for hosted cluster %s' % hosted_cluster_name)
-    kubeconfig_hosted = ["oc", "get", "secret", hosted_cluster_name + "-admin-kubeconfig", "-o", "json", "-n", "clusters"]
-    logging.debug(kubeconfig_hosted)
-    kubeconfig_hosted_process = subprocess.Popen(kubeconfig_hosted, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    kubeconfig_hosted_stdout, kubeconfig_hosted_stderr = kubeconfig_hosted_process.communicate()
-    kubeconfig_hosted_content = base64.b64decode(json.loads(kubeconfig_hosted_stdout)['data']['kubeconfig']).decode('ascii')
-    try:
-        logging.debug('Saving kubeconfig file of %s to the working directory' % hosted_cluster_name)
-        seed_file = open(my_path + "/" + hosted_cluster_name + "/kubeconfig", 'x')
-        seed_file.write(kubeconfig_hosted_content)
-        seed_file.close()
-    except Exception as err:
-        logging.debug('Cannot write file %s/%s/kubeconfig' % (my_path, hosted_cluster_name))
-        logging.error(err)
-        return 1
+def _cluster_load(my_path, hosted_cluster_name, load_duration, jobs, es_url, mgmt_cluster_name):
     load_env = os.environ.copy()
     load_env["KUBECONFIG"] = my_path + "/" + hosted_cluster_name + "/kubeconfig"
     logging.info('Cloning e2e-benchmarking repo https://github.com/cloud-bulldozer/e2e-benchmarking.git')
@@ -259,6 +267,97 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, load_duration, jobs,
     load_log = open(my_path + "/" + hosted_cluster_name + '/cluster_load.log', 'w')
     load_process = subprocess.Popen(load_command, stdout=load_log, stderr=load_log, env=load_env)
     load_process_stdout, load_process_stderr = load_process.communicate()
+
+
+def _get_must_gather(my_path, cluster_name):
+    cluster_path = my_path + "/" + cluster_name
+    myenv = os.environ.copy()
+    myenv["KUBECONFIG"] = cluster_path + "/kubeconfig"
+    logging.info('Gathering facts of hosted cluster %s' % cluster_name)
+    must_gather_command = ["oc", "adm", "must-gather", "--dest-dir", cluster_path + "/must_gather"]
+    logging.debug(must_gather_command)
+    must_gather_log = open(cluster_path + '/must_gather.log', 'w')
+    must_gather_process = subprocess.Popen(must_gather_command, stdout=must_gather_log, stderr=must_gather_log, env=myenv)
+    must_gather_stdout, must_gather_stderr = must_gather_process.communicate()
+    if must_gather_process.returncode != 0:
+        logging.error("Failed to obtain must-gather from %s" % cluster_name)
+        return 1
+    logging.info('Compressing must gather artifacts on %s file' % cluster_path + "/must_gather.tar.gz")
+    must_gather_compress_command = ["tar", "czvf", "must_gather.tar.gz", cluster_path + "/must_gather"]
+    logging.debug(must_gather_compress_command)
+    must_gather_compress_process = subprocess.Popen(must_gather_compress_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    must_gather_compress_stdout, must_gather_compress_stderr = must_gather_compress_process.communicate()
+    if must_gather_compress_process.returncode != 0:
+        logging.error("Failed to compress must-gather of %s cluster from %s to %s" % (cluster_name, cluster_path + "/must_gather", cluster_path + "must_gather.tar.gz"))
+        return 1
+    logging.info('Deleting non-compressed must-gather files of hosted cluster %s' % cluster_name)
+    must_gather_delete_command = ["rm", "-rf", cluster_path + "/must_gather"]
+    logging.debug(must_gather_delete_command)
+    must_gather_delete_process = subprocess.Popen(must_gather_delete_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    must_gather_delete_stdout, must_gather_delete_stderr = must_gather_delete_process.communicate()
+    if must_gather_delete_process.returncode != 0:
+        logging.error("Failed to delete non-compressed must-gather files of hosted cluster %s" % cluster_name)
+        return 1
+
+
+def _get_mgmt_cluster_must_gather(kubeconfig, my_path):
+    myenv = os.environ.copy()
+    myenv["KUBECONFIG"] = kubeconfig
+    logging.info('Gathering facts of management cluster')
+    must_gather_command = ["oc", "adm", "must-gather", "--dest-dir", my_path + "/must_gather"]
+    logging.debug(must_gather_command)
+    must_gather_log = open(my_path + '/management_cluster_must_gather.log', 'w')
+    must_gather_process = subprocess.Popen(must_gather_command, stdout=must_gather_log, stderr=must_gather_log, env=myenv)
+    must_gather_stdout, must_gather_stderr = must_gather_process.communicate()
+    if must_gather_process.returncode != 0:
+        logging.error("Failed to obtain must-gather from Management Cluster")
+        return 1
+    logging.info('Compressing must gather artifacts on %s file' % (my_path + "/management_cluster_must_gather.tar.gz"))
+    must_gather_compress_command = ["tar", "czvf", my_path + "/management_cluster_must_gather.tar.gz", my_path + "/must_gather"]
+    logging.debug(must_gather_compress_command)
+    must_gather_compress_process = subprocess.Popen(must_gather_compress_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    must_gather_compress_stdout, must_gather_compress_stderr = must_gather_compress_process.communicate()
+    if must_gather_compress_process.returncode != 0:
+        logging.error("Failed to compress must-gather of Management Cluster from %s to %s" % (my_path + "/must_gather", my_path + "must_gather.tar.gz"))
+        return 1
+    logging.info('Deleting non-compressed must-gather files of Management Cluster')
+    must_gather_delete_command = ["rm", "-rf", my_path + "/must_gather"]
+    logging.debug(must_gather_delete_command)
+    must_gather_delete_process = subprocess.Popen(must_gather_delete_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    must_gather_delete_stdout, must_gather_delete_stderr = must_gather_delete_process.communicate()
+    if must_gather_delete_process.returncode != 0:
+        logging.error("Failed to delete non-compressed must-gather files of Management Cluster")
+        return 1
+
+
+def _get_dump_cluster(kubeconfig, hypershift_cmd, my_path, cluster_name):
+    myenv = os.environ.copy()
+    myenv["KUBECONFIG"] = kubeconfig
+    logging.info('Hypershift dump for guest cluster %s' % cluster_name)
+    dump_cluster_command = [hypershift_cmd, "dump", "cluster", "--name", cluster_name, "--dump-guest-cluster", "--artifact-dir", my_path + "/dump_cluster"]
+    logging.debug(dump_cluster_command)
+    dump_cluster_log = open(my_path + '/dump_cluster.log', 'w')
+    dump_cluster_process = subprocess.Popen(dump_cluster_command, stdout=dump_cluster_log, stderr=dump_cluster_log, env=myenv)
+    dump_cluster_stdout, dump_cluster_stderr = dump_cluster_process.communicate()
+    if dump_cluster_process.returncode != 0:
+        logging.error("Failed to obtain dump cluster from %s" % cluster_name)
+        return 1
+    logging.info('Saving tar file hypershift-dump.tar.gz to parent folder %s ' % my_path)
+    mv_tar_command = ["mv", my_path + "/dump_cluster/hypershift-dump.tar.gz", my_path]
+    logging.debug(mv_tar_command)
+    mv_tar_process = subprocess.Popen(mv_tar_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    mv_tar_stdout, mv_tar_stderr = mv_tar_process.communicate()
+    if mv_tar_process.returncode != 0:
+        logging.error("Failed to move tar file hypershift-dump.tar.gz to parent folder %s" % my_path)
+        return 1
+    logging.info('Deleting dump_cluster folder of hosted cluster %s' % cluster_name)
+    dump_cluster_delete_command = ["rm", "-rf", my_path + "/dump_cluster"]
+    logging.debug(dump_cluster_delete_command)
+    dump_cluster_delete_process = subprocess.Popen(dump_cluster_delete_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    dump_cluster_delete_stdout, dump_cluster_delete_stderr = dump_cluster_delete_process.communicate()
+    if dump_cluster_delete_process.returncode != 0:
+        logging.error("Failed to delete dump_cluster folder of hosted cluster %s" % cluster_name)
+        return 1
 
 
 def get_metadata(kubeconfig, my_path, duration, cluster_name, uuid, operation):
@@ -355,6 +454,7 @@ def _cleanup_cluster(hypershift_cmnd, kubeconfig, mgmt_cluster_name, cluster_nam
     stdout, stderr = process.communicate()
     cluster_end_time = int(time.time())
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
+    metadata['cluster_name'] = cluster_name
     metadata['duration'] = cluster_end_time - cluster_start_time
     metadata['job_iterations'] = ""
     metadata['load_duration'] = ""
@@ -458,6 +558,10 @@ def main():
         type=int,
         default=0,
         help='Percentage of variation of jobs to execute. Job iterations will be a number from jobs_per_worker * workers * (-X%% to +X%%)')
+    parser.add_argument(
+        '--must-gather-all',
+        action='store_true',
+        help='If selected, collect must-gather from all cluster, if not, only collect from failed clusters')
 
     global args
     args = parser.parse_args()
@@ -603,7 +707,8 @@ def main():
             oc_process = subprocess.Popen(oc_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=mgmt_env)
             oc_stdout, oc_stderr = oc_process.communicate()
             if oc_process.returncode != 0:
-                logging.error('%s Hosted clusters CRD is not installed on %s' % mgmt_metadata['cluster_name'])
+                logging.error('Hosted clusters CRD is not installed on %s' % mgmt_metadata['cluster_name'])
+                exit(1)
             else:
                 logging.info('Hosted clusters CRD installed')
     else:
@@ -643,27 +748,25 @@ def main():
             else:
                 loop_counter += 1
                 create_cluster = True
-
             if create_cluster:
                 logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
                 pattern = re.compile(r"^(\d+)(,\s*\d+)*$")
                 if args.workers.isdigit():
-                    workers = args.workers
+                    workers = int(args.workers)
                 elif bool(pattern.match(args.workers)):
                     workers = int(args.workers.split(",")[(loop_counter - 1) % len(args.workers.split(","))])
-                    if args.add_cluster_load:
-                        low_jobs = int((args.cluster_load_jobs_per_worker * workers) - (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100))
-                        high_jobs = int((args.cluster_load_jobs_per_worker * workers) + (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100))
-                        jobs = random.randint(low_jobs, high_jobs)
-                        logging.debug("Selected jobs: %d" % jobs)
-                    else:
-                        jobs = 0
                 else:
                     logging.error("Invalid value for parameter --workers %s. Setting workers to 0" % args.workers)
                     workers = 0
+                if args.add_cluster_load:
+                    low_jobs = max(0, int((args.cluster_load_jobs_per_worker * workers) - (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100)))
+                    high_jobs = int((args.cluster_load_jobs_per_worker * workers) + (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100))
+                    jobs = random.randint(low_jobs, high_jobs)
+                    logging.debug("Selected jobs: %d" % jobs)
+                else:
                     jobs = 0
                 try:
-                    thread = threading.Thread(target=_build_cluster, args=(hypershift_cmnd, mgmt_kubeconfig_path, cluster_name_seed, mgmt_metadata['base_domain'], args.add_cluster_load, args.cluster_load_duration, jobs, workers, mgmt_metadata['aws_region'], args.pull_secret_file, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_metadata["cluster_name"], all_clusters_installed))
+                    thread = threading.Thread(target=_build_cluster, args=(hypershift_cmnd, mgmt_kubeconfig_path, cluster_name_seed, mgmt_metadata['base_domain'], args.must_gather_all, args.add_cluster_load, args.cluster_load_duration, jobs, workers, mgmt_metadata['aws_region'], args.pull_secret_file, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_metadata["cluster_name"], all_clusters_installed))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
@@ -688,6 +791,9 @@ def main():
                 continue
             else:
                 raise
+
+    logging.info('Collect must-gather from Management Cluster %s' % mgmt_metadata['cluster_name'])
+    _get_mgmt_cluster_must_gather(mgmt_kubeconfig_path, my_path)
 
     if args.cleanup_clusters:
         logging.info('Attempting to delete all hosted clusters with seed %s' % (cluster_name_seed))
