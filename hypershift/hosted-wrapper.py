@@ -128,7 +128,12 @@ def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster, es, index, index_retry, uuid,
                 metadata['version'] = cluster['openshift_version']
                 metadata['base_domain'] = cluster['dns']['base_domain']
                 metadata['aws_region'] = cluster['region']['id']
-                metadata['workers'] = cluster['nodes']['compute']
+                if 'compute' in cluster['nodes']:
+                    metadata['workers'] = cluster['nodes']['compute']
+                else: # when autoscaling enabled
+                    metadata['workers'] = cluster['nodes']['autoscale_compute']['min_replicas']
+                    metadata['workers_min'] = cluster['nodes']['autoscale_compute']['min_replicas']
+                    metadata['workers_max'] = cluster['nodes']['autoscale_compute']['max_replicas']                
                 metadata['workers_type'] = cluster['nodes']['compute_machine_type']['id']
                 metadata['network_type'] = cluster['network']['type']
                 # metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
