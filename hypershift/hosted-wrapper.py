@@ -134,6 +134,7 @@ def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster, es, index, index_retry, uuid,
                 # metadata["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
                 metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
                 metadata['hostedclusters'] = hostedclusters
+                metadata['install_method'] = "hypershift"
                 es_ignored_metadata = ""
                 if es is not None:
                     common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
@@ -191,6 +192,7 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
     metadata['job_iterations'] = str(job_iterations) if cluster_load else 0
     metadata['load_duration'] = load_duration if cluster_load else ""
     metadata['workers'] = str(worker_nodes)
+    metadata['install_method'] = "hypershift"
     if process.returncode == 0:
         logging.info('Getting kubeconfig for hosted cluster %s' % cluster_name)
         kubeconfig_hosted = ["oc", "get", "secret", cluster_name + "-admin-kubeconfig", "-o", "json", "-n", "clusters"]
@@ -228,7 +230,7 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
         logging.error(stdout)
         logging.error(stderr)
     if must_gather_all or process.returncode != 0:
-        random_sleep = random.randint(60,300)
+        random_sleep = random.randint(60, 300)
         logging.info("Waiting %d seconds before dumping hosted cluster must-gather" % random_sleep)
         time.sleep(random_sleep)
         # logging.info("Saving must-gather file of hosted cluster %s" % cluster_name)
