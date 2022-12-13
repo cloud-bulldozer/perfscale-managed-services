@@ -163,7 +163,7 @@ def _download_kubeconfig(ocm_cmnd, mgmt_cluster_id, my_path):
         return kubeconfig_path
 
 
-def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt_cluster_base_domain, must_gather_all, cluster_load, load_duration, job_iterations, worker_nodes, mgmt_cluster_aws_zone, pull_secret_file, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_cluster_name, all_clusters_installed):
+def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt_cluster_base_domain, must_gather_all, cluster_load, load_duration, job_iterations, worker_nodes, mgmt_cluster_aws_zone, pull_secret_file, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_cluster_name, all_clusters_installed, prom_url, thanos_url):
     myenv = os.environ.copy()
     myenv["KUBECONFIG"] = kubeconfig_location
     # pass that dir as the cwd to subproccess
@@ -221,7 +221,7 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
                 logging.info('Waiting for all clusters to be installed to start e2e-benchmarking execution on %s' % cluster_name)
                 all_clusters_installed.wait()
             logging.info('Executing e2e-benchmarking to add load on the cluster %s with %s nodes during %s with %d iterations' % (cluster_name, str(worker_nodes), load_duration, job_iterations))
-            _cluster_load(my_path, cluster_name, load_duration, job_iterations, es_url, mgmt_cluster_name)
+            _cluster_load(my_path, cluster_name, load_duration, job_iterations, es_url, mgmt_cluster_name, prom_url, thanos_url)
             logging.info('Finished execution of e2e-benchmarking workload on %s' % cluster_name)
     else:
         if es is not None:
@@ -242,7 +242,7 @@ def _build_cluster(hypershift_cmnd, kubeconfig_location, cluster_name_seed, mgmt
         _get_dump_cluster(kubeconfig_location, hypershift_cmnd, cluster_path, cluster_name)
 
 
-def _cluster_load(my_path, hosted_cluster_name, load_duration, jobs, es_url, mgmt_cluster_name):
+def _cluster_load(my_path, hosted_cluster_name, load_duration, jobs, es_url, mgmt_cluster_name, prom_url, thanos_url):
     load_env = os.environ.copy()
     load_env["KUBECONFIG"] = my_path + "/" + hosted_cluster_name + "/kubeconfig"
     logging.info('Cloning e2e-benchmarking repo https://github.com/cloud-bulldozer/e2e-benchmarking.git')
@@ -261,8 +261,8 @@ def _cluster_load(my_path, hosted_cluster_name, load_duration, jobs, es_url, mgm
     load_env["HOSTED_CLUSTER_NS"] = "clusters-" + hosted_cluster_name
     if es_url is not None:
         load_env["ES_SERVER"] = es_url
-    load_env["PROM_URL"] = "https://thanos-query.apps.observability.perfscale.devcluster.openshift.com"
-    load_env["THANOS_RECEIVER_URL"] = "http://thanos.apps.observability.perfscale.devcluster.openshift.com/api/v1/receive"
+    load_env["PROM_URL"] = prom_url
+    load_env["THANOS_RECEIVER_URL"] = thanos_url
     load_env["LOG_LEVEL"] = "debug"
     load_env["WORKLOAD"] = "cluster-density-ms"
     load_env["JOB_PAUSE"] = str(randrange(100, 1000)) + "s"
@@ -567,6 +567,16 @@ def main():
         '--must-gather-all',
         action='store_true',
         help='If selected, collect must-gather from all cluster, if not, only collect from failed clusters')
+    parser.add_argument(
+        '--thanos-querier-url',
+        type=str,
+        default='http://thanos.apps.cluster.devcluster/api/v1/query',
+        help='Thanos querier url to read metric, needed for kube-burner when indexing is set to true')
+    parser.add_argument(
+        '--thanos-receiver-url',
+        type=str,
+        default='http://thanos.apps.cluster.devcluster/api/v1/receive',
+        help='Thanos receiver url to remote write metrics, needed for grafana agent pods')
 
     global args
     args = parser.parse_args()
@@ -771,7 +781,7 @@ def main():
                 else:
                     jobs = 0
                 try:
-                    thread = threading.Thread(target=_build_cluster, args=(hypershift_cmnd, mgmt_kubeconfig_path, cluster_name_seed, mgmt_metadata['base_domain'], args.must_gather_all, args.add_cluster_load, args.cluster_load_duration, jobs, workers, mgmt_metadata['aws_region'], args.pull_secret_file, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_metadata["cluster_name"], all_clusters_installed))
+                    thread = threading.Thread(target=_build_cluster, args=(hypershift_cmnd, mgmt_kubeconfig_path, cluster_name_seed, mgmt_metadata['base_domain'], args.must_gather_all, args.add_cluster_load, args.cluster_load_duration, jobs, workers, mgmt_metadata['aws_region'], args.pull_secret_file, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_metadata["cluster_name"], all_clusters_installed, args.thanos_querier_url, args.thanos_receiver_url))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
