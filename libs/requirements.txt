@@ -1,2 +1,2 @@
-elasticsearch
+elasticsearch>=7.0.0,<7.14.0
 urllib3
