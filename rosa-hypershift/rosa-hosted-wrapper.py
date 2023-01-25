@@ -128,90 +128,91 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
 def _verify_terraform(terraform_cmnd, my_path):
     logging.info('Testing terraform command with: terraform -version')
     terraform_cmd = [terraform_cmnd, "-version"]
-    terraform_log = open(my_path + "/" + 'terraform.log', 'w')
+    terraform_log = open(my_path + "/" + 'terraform-version.log', 'w')
     terraform_process = subprocess.Popen(terraform_cmd, stdout=terraform_log, stderr=terraform_log)
     terraform_stdout, terraform_stderr = terraform_process.communicate()
     if terraform_process.returncode != 0:
         logging.error('%s unable to execute -version' % terraform_cmnd)
-        logging.error(terraform_stdout.strip().decode("utf-8"))
-        logging.error(terraform_stderr.strip().decode("utf-8"))
         exit(1)
     logging.info('terraform command validated with -version. Directory is %s' % my_path)
     return terraform_cmnd
 
 
-def _create_vpc(terraform, retries, my_path, cluster_name):
+def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, aws_region):
     logging.info('Initializing Terraform with: terraform init')
     terraform_init = [terraform, "init"]
-    terraform_log = open(my_path + "/terraform/" + 'terraform.log', 'w')
+    terraform_log = open(my_path + "/terraform/" + 'terraform-apply.log', 'w')
     terraform_init_process = subprocess.Popen(terraform_init, cwd=my_path + "/terraform", stdout=terraform_log, stderr=terraform_log)
     terraform_init_stdout, terraform_init_stderr = terraform_init_process.communicate()
     if terraform_init_process.returncode != 0:
         logging.error('Failed to initialize terraform on %s' % my_path + "/terraform")
-        logging.error(terraform_init_stdout.strip().decode("utf-8"))
-        logging.error(terraform_init_stderr.strip().decode("utf-8"))
         return 1
-    logging.info('Applying terraform plan command with: terraform apply for cluster %s' % cluster_name)
+    logging.info('Applying terraform plan command with: terraform apply for %s cluster, using %s as name seed on %s' % (cluster_count, cluster_name_seed, aws_region))
     for trying in range(retries):
         myenv = os.environ.copy()
-        myenv["TF_VAR_cluster_name"] = cluster_name
+        myenv["TF_VAR_cluster_name_seed"] = cluster_name_seed
+        myenv["TF_VAR_cluster_count"] = str(cluster_count)
+        myenv["TF_VAR_aws_region"] = aws_region
         terraform_apply = [terraform, "apply", "--auto-approve"]
         terraform_apply_process = subprocess.Popen(terraform_apply, cwd=my_path + "/terraform", stdout=terraform_log, stderr=terraform_log, env=myenv)
         terraform_apply_stdout, terraform_apply_stderr = terraform_apply_process.communicate()
         if terraform_apply_process.returncode == 0:
-            logging.info('Applied terraform plan command with: terraform apply on cluster %s' % cluster_name)
+            logging.info('Applied terraform plan command with: terraform apply')
             try:
-                with open(my_path + "/terraform/terraform.tfstate", "r") as output:
-                    output_json = json.load(output)
+                with open(my_path + "/terraform/terraform.tfstate", "r") as terraform_file:
+                    json_output = json.load(terraform_file)
             except Exception as err:
                 logging.error(err)
-                logging.error('Try: %d. Failed to read terraform output file %s, retrying in 15 seconds' % (trying, my_path + "/terraform/terraform.tfstate"))
+                logging.error('Try: %d. Failed to read terraform output file %s' % (my_path + "/terraform/terraform.tfstate"))
+                return 1
+            vpcs = []
+            # Check if we have IDs for everything
+            number_of_vpcs = len(json_output['outputs']['vpc-id']['value'])
+            number_of_public = len(json_output['outputs']['cluster-public-subnet']['value'])
+            number_of_private = len(json_output['outputs']['cluster-private-subnet']['value'])
+            if number_of_vpcs != cluster_count or number_of_public != cluster_count or number_of_private != cluster_count:
+                logging.error("Required Clusters: %d" % cluster_count)
+                logging.error('Number of VPCs: %d' % number_of_vpcs)
+                logging.error('Number of Private Subnets: %d' % number_of_private)
+                logging.error('Number of Public Subnets: %d' % number_of_public)
+                logging.error('Try %d: Not all resources has been created. retring in 15 seconds' % trying)
                 time.sleep(15)
-                continue
-            private_subnet = output_json['outputs']['cluster-private-subnet']['value'] if 'outputs' in output_json and 'cluster-private-subnet' in output_json['outputs'] and 'value' in output_json['outputs']['cluster-private-subnet'] else ""
-            public_subnet = output_json['outputs']['cluster-public-subnet']['value'] if 'outputs' in output_json and 'cluster-private-subnet' in output_json['outputs'] and 'value' in output_json['outputs']['cluster-private-subnet'] else ""
-            break
+            else:
+                for cluster in range(cluster_count):
+                    vpc_id = json_output['outputs']['vpc-id']['value'][cluster]
+                    public_subnet = json_output['outputs']['cluster-public-subnet']['value'][cluster]
+                    private_subnet = json_output['outputs']['cluster-private-subnet']['value'][cluster]
+                    logging.debug("VPC ID: %s, Public Subnet: %s, Private Subnet: %s" % (vpc_id, public_subnet, private_subnet))
+                    vpcs.append((vpc_id, public_subnet, private_subnet))
+                return vpcs
         else:
-            logging.error('Try: %d. %s unable to execute apply for cluster %s, retrying in 15 seconds' % (trying, terraform, cluster_name))
-            logging.error(terraform_apply_stdout.strip().decode("utf-8"))
-            logging.error(terraform_apply_stderr.strip().decode("utf-8"))
+            logging.error('Try: %d. %s unable to execute apply, retrying in 15 seconds' % (trying, terraform))
             time.sleep(15)
-    private_subnet = output_json['outputs']['cluster-private-subnet']['value'] if 'outputs' in output_json and 'cluster-private-subnet' in output_json['outputs'] and 'value' in output_json['outputs']['cluster-private-subnet'] else ""
-    public_subnet = output_json['outputs']['cluster-public-subnet']['value'] if 'outputs' in output_json and 'cluster-private-subnet' in output_json['outputs'] and 'value' in output_json['outputs']['cluster-private-subnet'] else ""
-    if private_subnet != "" and public_subnet != "":
-        return (private_subnet, public_subnet)
-    else:
-        return 1
+    return 1
 
 
-def _destroy_vpc(terraform, retries, my_path, cluster_name, aws_region):
+def _destroy_vpcs(terraform, retries, my_path, aws_region, vpcs):
     terraform_destroy = [terraform, "destroy", "--auto-approve"]
-    terraform_log = open(my_path + "/terraform/" + 'terraform.log', 'w')
+    terraform_log = open(my_path + "/terraform/" + 'terraform-destroy.log', 'w')
     for trying in range(retries):
         if args.manually_cleanup_secgroups:
-            _delete_security_groups(aws_region, my_path)
+            for cluster in vpcs:
+                logging.info("Try: %d. Starting manually destroy of security groups" % trying)
+                _delete_security_groups(aws_region, my_path, cluster[0])
+        logging.info("Try: %d. Starting terraform destroy process" % trying)
         terraform_destroy_process = subprocess.Popen(terraform_destroy, cwd=my_path + "/terraform", stdout=terraform_log, stderr=terraform_log)
         terraform_destroy_stdout, terraform_destroy_stderr = terraform_destroy_process.communicate()
         if terraform_destroy_process.returncode == 0:
-            logging.info("%s cluster VPC destroyed" % cluster_name)
-            break
+            logging.info("Try: %d. All VPCs destroyed" % trying)
+            return 0
         else:
-            logging.error('Try: %d. %s unable to execute destroy on cluster %s, retrying in 15 seconds' % (trying, terraform, cluster_name))
-            logging.error(terraform_destroy_stdout.strip().decode("utf-8"))
-            logging.error(terraform_destroy_stderr.strip().decode("utf-8"))
+            logging.error('Try: %d. Failed to execute %s destroy, retrying in 15 seconds' % (trying, terraform))
             time.sleep(15)
+    return 1
 
 
-def _delete_security_groups(aws_region, my_path):
-    try:
-        with open(my_path + "/terraform/terraform.tfstate", "r") as output:
-            output_json = json.load(output)
-    except Exception as err:
-        logging.error(err)
-        logging.error('Failed to read terraform output file %s' % my_path + "/terraform/terraform.tfstate")
-        return 1
-    aws_log = open(my_path + "/terraform/" + 'aws.log', 'w')
-    vpc_id = output_json['outputs']['vpc-id']['value'] if 'outputs' in output_json and 'vpc-id' in output_json['outputs'] and 'value' in output_json['outputs']['vpc-id'] else ""
+def _delete_security_groups(aws_region, my_path, vpc_id):
+    aws_log = open(my_path + "/terraform/" + 'aws_delete_sec_groups.log', 'w')
     sec_groups_command = ["aws", "ec2", "describe-security-groups", "--filters", "Name=vpc-id,Values=" + vpc_id, "Name=group-name,Values=default,k8s*", "--region=" + aws_region, "--output", "json"]
     logging.debug(sec_groups_command)
     sec_groups_process = subprocess.Popen(sec_groups_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -352,7 +353,7 @@ def _download_kubeconfig(ocm_cmnd, cluster_id, my_path):
         return kubeconfig_path
 
 
-def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, terraform_retry, terraform_cmnd, create_vpc, my_path, my_uuid, my_inc, es, es_url, index, index_retry, all_clusters_installed):
+def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, all_clusters_installed):
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
     os.mkdir(cluster_path)
@@ -361,14 +362,8 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
     cluster_name = cluster_name_seed + "-" + str(my_inc).zfill(4)
     cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, "--replicas", str(worker_nodes), "--hosted-cp", "--sts", "--mode", "auto", "-y"]
     if create_vpc:
-        os.mkdir(cluster_path + "/terraform")
-        shutil.copyfile(sys.path[0] + "/terraform/setup-vpc.tf", cluster_path + "/terraform/setup-vpc.tf")
-        vpc_result = _create_vpc(terraform_cmnd, terraform_retry, cluster_path, cluster_name)
-        if vpc_result != 1:
-            cluster_cmd.append("--subnet-ids")
-            cluster_cmd.append(vpc_result[0] + "," + vpc_result[1])
-        else:
-            logging.error("Failed to create VPC for cluster %s. Not creating the cluster" % cluster_name)
+        cluster_cmd.append("--subnet-ids")
+        cluster_cmd.append(vpc_info[1] + "," + vpc_info[2])
     if provision_shard:
         cluster_cmd.append("--properties")
         cluster_cmd.append("provision_shard_id:" + provision_shard)
@@ -680,7 +675,7 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
     logging.info('Watcher exiting')
 
 
-def _cleanup_cluster(rosa_cmnd, terraform_cmnd, terraform_retry, cluster_name, mgmt_cluster_name, create_vpc, my_path, my_uuid, es, index, index_retry):
+def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uuid, es, index, index_retry):
     cluster_path = my_path + "/" + cluster_name
     metadata = get_metadata(cluster_name, rosa_cmnd)
     logging.debug('Destroying cluster name: %s' % cluster_name)
@@ -704,9 +699,6 @@ def _cleanup_cluster(rosa_cmnd, terraform_cmnd, terraform_retry, cluster_name, m
     if process_oidc.returncode != 0:
         logging.error("Failed to delete operator roles on cluster %s" % cluster_name)
     cluster_end_time = int(time.time())
-    if create_vpc:
-        logging.info("Destroying %s VPC using terraform" % cluster_name)
-        _destroy_vpc(terraform_cmnd, terraform_retry, cluster_path, cluster_name, args.aws_region)
     metadata['install_method'] = "rosa"
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
     metadata['duration'] = cluster_delete_end_time - cluster_start_time
@@ -836,6 +828,7 @@ def main():
     parser.add_argument(
         '--terraform-retry',
         type=int,
+        default=5,
         help="Number of retries when executing terraform commands")
     parser.add_argument(
         '--create-vpc',
@@ -940,7 +933,7 @@ def main():
             parser.error("--terraform-cli is required when using --create-vpc")
         else:
             os.mkdir(my_path + "/terraform")
-            shutil.copyfile(sys.path[0] + "/terraform/setup-vpc.tf", my_path + "/terraform/setup-vpc.tf")
+            shutil.copyfile(sys.path[0] + "/terraform/setup-vpcs.tf", my_path + "/terraform/setup-vpcs.tf")
             terraform_cmnd = _verify_terraform(args.terraform_cli, my_path + "/terraform")
 
     ocm_cmnd, rosa_cmnd = _verify_cmnds(args.ocm_cli, args.rosa_cli, my_path, args.ocm_cli_version, args.rosa_cli_version)
@@ -1003,6 +996,13 @@ def main():
     else:
         access_to_mgmt_cluster = False
 
+    if args.create_vpc:
+        vpcs = _create_vpcs(terraform_cmnd, args.terraform_retry, my_path, cluster_name_seed, args.cluster_count, args.aws_region)
+        if vpcs == 1:
+            logging.error("Failed to create AWS VPCs, destroying them and exiting...")
+            _destroy_vpcs(terraform_cmnd, args.terraform_retry, my_path, args.aws_region, vpcs)
+            exit(1)
+
     # launch watcher thread to report status
     logging.info('Launching watcher thread')
     clusters_resume = {}
@@ -1058,8 +1058,12 @@ def main():
                     logging.debug("Selected jobs: %d" % jobs)
                 else:
                     jobs = 0
+                vpc_info = ""
+                if args.create_vpc:
+                    vpc_info = vpcs[(loop_counter - 1)]
+                    logging.debug("Creating cluster on VPC %s, with Public Subnet: %s and Private Subnet: %s" % (vpc_info[0], vpc_info[1], vpc_info[2]))
                 try:
-                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, args.terraform_retry, terraform_cmnd, args.create_vpc, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, all_clusters_installed))
+                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, all_clusters_installed))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
@@ -1107,7 +1111,7 @@ def main():
             if 'name' in cluster and cluster_name_seed in cluster['name']:
                 logging.debug('Starting cluster cleanup %s' % cluster['name'])
                 try:
-                    thread = threading.Thread(target=_cleanup_cluster, args=(rosa_cmnd, terraform_cmnd, args.terraform_retry, cluster['name'], args.mgmt_cluster, args.create_vpc, my_path, my_uuid, es, args.es_index, args.es_index_retry))
+                    thread = threading.Thread(target=_cleanup_cluster, args=(rosa_cmnd, cluster['name'], args.mgmt_cluster, my_path, my_uuid, es, args.es_index, args.es_index_retry))
                 except Exception as err:
                     logging.error('Thread creation failed')
                     logging.error(err)
@@ -1126,6 +1130,11 @@ def main():
                     continue
                 else:
                     raise
+
+    if args.create_vpc:
+        destroy_result = _destroy_vpcs(terraform_cmnd, args.terraform_retry, my_path, args.aws_region, vpcs)
+        if destroy_result == 1:
+            logging.error("Failed to destroy all VPCs, please manually delete them")
 
     if args.cleanup:
         logging.info('Cleaning working directory %s' % my_path)

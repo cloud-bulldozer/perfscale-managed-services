@@ -1,8 +1,12 @@
-# File initially loaded from https://gist.githubusercontent.com/wgordon17/d88501a15204a2f8143bc275a3f64c80/raw/setup-vpc.tf
+variable "cluster_count" {
+  type        = number
+  description = "The number of VPCs to create"
+  default     = 1
+}
 
-variable "cluster_name" {
+variable "cluster_name_seed" {
   type        = string
-  description = "The name of the ROSA cluster to create"
+  description = "The name used to create the VPCs"
   default     = "rosa-cluster"
 }
 
@@ -21,10 +25,11 @@ provider "aws" {
 }
 
 module "vpc" {
+  count   = var.cluster_count
   source  = "terraform-aws-modules/vpc/aws"
   version = "3.14.2"
   azs     = [data.aws_availability_zones.available.names[0]]
-  name    = "vpc-${var.cluster_name}"
+  name    = "vpc-${var.cluster_name_seed}-${format("%04d", count.index + 1)}"
   cidr    = "10.0.0.0/16"
 
   private_subnets = ["10.0.1.0/24"]
@@ -37,13 +42,13 @@ module "vpc" {
 }
 
 output "vpc-id" {
-  value = module.vpc.vpc_id
+  value = module.vpc.*.vpc_id
 }
 
 output "cluster-private-subnet" {
-  value = module.vpc.private_subnets[0]
+  value = [for vpc in module.vpc : vpc.private_subnets[0]]
 }
 
 output "cluster-public-subnet" {
-  value = module.vpc.public_subnets[0]
+  value = [for vpc in module.vpc : vpc.public_subnets[0]]
 }
