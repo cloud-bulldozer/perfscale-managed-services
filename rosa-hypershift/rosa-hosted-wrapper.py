@@ -148,7 +148,7 @@ def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, 
         logging.error('Failed to initialize terraform on %s' % my_path + "/terraform")
         return 1
     logging.info('Applying terraform plan command with: terraform apply for %s cluster, using %s as name seed on %s' % (cluster_count, cluster_name_seed, aws_region))
-    for trying in range(retries):
+    for trying in range(1, retries + 1):
         myenv = os.environ.copy()
         myenv["TF_VAR_cluster_name_seed"] = cluster_name_seed
         myenv["TF_VAR_cluster_count"] = str(cluster_count)
@@ -194,7 +194,7 @@ def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, 
 def _destroy_vpcs(terraform, retries, my_path, aws_region, vpcs):
     terraform_destroy = [terraform, "destroy", "--auto-approve"]
     terraform_log = open(my_path + "/terraform/" + 'terraform-destroy.log', 'w')
-    for trying in range(retries):
+    for trying in range(1, retries + 1):
         if args.manually_cleanup_secgroups:
             for cluster in vpcs:
                 logging.info("Try: %d. Starting manually destroy of security groups" % trying)
@@ -353,6 +353,55 @@ def _download_kubeconfig(ocm_cmnd, cluster_id, my_path):
         return kubeconfig_path
 
 
+def _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, my_path):
+    return_data = {}
+    logging.info('Creating cluster-admin user on cluster %s (100 retries allowed)' % cluster_name)
+    kubeconfig_cmd = [rosa_cmnd,  "create", "admin", "-c", cluster_name, "-o", "json"]
+    logging.debug(kubeconfig_cmd)
+    for trying in range(1, 101):
+        process = subprocess.Popen(kubeconfig_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
+        cluster_admin_create_time = int(time.time())
+        stdout, stderr = process.communicate()
+        if process.returncode != 0:
+            logging.error('Try: %d. Failed to create cluster-admin user on %s with this stdout/stderr:' % (trying, cluster_name))
+            logging.error(stdout)
+            logging.error(stderr)
+            logging.error('Try: %d. Waiting 5 seconds for the next try on %s' % (trying, cluster_name))
+            time.sleep(5)
+            return_data['cluster-admin-create'] = int(time.time()) - cluster_admin_create_time
+        else:
+            logging.debug('Trying to login on cluster %s (100 retries allowed, 5s timeout on oc command)' % cluster_name)
+            for trying2 in range(1, 101):
+                oc_login_cmnd = ["oc", "login", json.loads(stdout)['api_url'], "--username", json.loads(stdout)['username'], "--password", json.loads(stdout)['password'], "--kubeconfig", my_path + "/kubeconfig", "--insecure-skip-tls-verify=true", "--request-timeout=30s"]
+                logging.debug(oc_login_cmnd)
+                oc_login_time = int(time.time())
+                process_oc_login = subprocess.Popen(oc_login_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
+                stdout_oc_login, stderr_oc_login = process_oc_login.communicate()
+                if process_oc_login.returncode != 0:
+                    logging.error('Try: %d. Failed to login on cluster %s with cluster-admin user with this stdout/stderr:' % (trying2, cluster_name))
+                    logging.error(stdout_oc_login)
+                    logging.error(stderr_oc_login)
+                    logging.error('Try: %d. Waiting 5 seconds for the next try on %s' % (trying2, cluster_name))
+                    time.sleep(5)
+                else:
+                    logging.info("Try: %d. Login succesfull on cluster %s, checking if kubeconfig has been downloaded" % (trying2, cluster_name))
+                    with open(my_path + "/kubeconfig", "r") as kubeconfig_file:
+                        kubeconfig = kubeconfig_file.readlines()
+                        for line in kubeconfig:
+                            if json.loads(stdout)['api_url'] in line:
+                                logging.info("Try %d. Valid kubeconfig downloaded for %s" % (trying2, cluster_name))
+                                return_data['kubeconfig'] = my_path + "/kubeconfig"
+                                return_data['cluster-admin-login'] = int(time.time()) - oc_login_time
+                                return return_data
+                        logging.error("Try: %d. Kubeconfig %s is not valid for cluster %s" % (trying2, my_path + "/kubeconfig", cluster_name))
+                        logging.error('Try: %d. Waiting 5 seconds for the next try on %s' % (trying2, cluster_name))
+                        time.sleep(5)
+            logging.error("Failed to login on cluster %s after 100 retries. Exiting" % cluster_name)
+            return return_data
+    logging.error("Failed to create cluster-admin user on cluster %s after 100 retries. Exiting" % cluster_name)
+    return return_data
+
+
 def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, all_clusters_installed):
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
@@ -384,7 +433,10 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
         watch_stdout, watch_stderr = watch_process.communicate()
         cluster_end_time = int(time.time())
         metadata = get_metadata(cluster_name, rosa_cmnd)
-        kubeconfig = _download_kubeconfig(ocm_cmnd, metadata['cluster_id'], cluster_path)
+        return_data = _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, cluster_path)
+        kubeconfig = return_data['kubeconfig'] if 'kubeconfig' in return_data else ""
+        metadata['cluster-admin-create'] = return_data['cluster-admin-create'] if 'cluster-admin-create' in return_data else 0
+        metadata['cluster-admin-login'] = return_data['cluster-admin-login'] if 'cluster-admin-login' in return_data else 0
         if kubeconfig == "":
             logging.error("Failed to download kubeconfig file. Disabling wait for workers and e2e-benchmarking execution on %s" % cluster_name)
             wait_time = 0
@@ -401,8 +453,9 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
                 metadata['status'] = "Ready. No Workers"
             metadata['workers_ready'] = cluster_workers_ready - cluster_start_time if workers_ready == worker_nodes else ""
         else:
+            logging.info("Cluster %s ready. Not waiting for workers to be ready. Setting workers_ready to 0 on ES Document" % cluster_name)
+            metadata['workers_ready'] = 0
             cluster_load = False
-            metadata['workers_ready'] = "None"
     else:
         cluster_end_time = int(time.time())
         logging.error("Failed to install cluster %s" % cluster_name)
@@ -671,7 +724,6 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
                     break
             elif not cluster_load:
                 logging.info('All clusters on ready status and no loading process required. Waiting 5 extra minutes to allow all cluster installations to finish.')
-                all_clusters_installed.notify_all()
                 time.sleep(300)
                 break
             else:
@@ -827,8 +879,8 @@ def main():
     parser.add_argument(
         '--workers-wait-time',
         type=int,
-        default=15,
-        help="Waiting time in minutes for the workers to be Ready after cluster installation.. If 0, do not wait. Default: 15 minutes")
+        default=60,
+        help="Waiting time in minutes for the workers to be Ready after cluster installation.. If 0, do not wait. Default: 60 minutes")
     parser.add_argument(
         '--terraform-cli',
         type=str,
