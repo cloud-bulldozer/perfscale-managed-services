@@ -1118,7 +1118,9 @@ def main():
                 delete_cluster_thread_list.append(thread)
                 thread.start()
                 logging.debug('Number of alive threads %d' % threading.active_count())
-
+                if args.delay_between_cleanup != 0:
+                    logging.info('Waiting %d seconds for deleting the next cluster' % args.delay_between_cleanup)
+                    time.sleep(args.delay_between_cleanup)
         # Wait for active threads to finish
         logging.info('All clusters (%d) requested to be deleted. Waiting for them to finish' % len(delete_cluster_thread_list))
         for t in delete_cluster_thread_list:
