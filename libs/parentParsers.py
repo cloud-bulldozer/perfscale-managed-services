@@ -66,6 +66,11 @@ runnerParser.add_argument(
     type=int,
     help='number of clusters in a batch')
 runnerParser.add_argument(
+    '--delay-between-cleanup',
+    type=int,
+    default=0,
+    help='If set it will wait x seconds between each cluster deletion')
+runnerParser.add_argument(
     '--watcher-delay',
     default=60,
     type=int,

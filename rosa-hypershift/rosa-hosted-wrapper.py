@@ -385,17 +385,24 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
         cluster_end_time = int(time.time())
         metadata = get_metadata(cluster_name, rosa_cmnd)
         kubeconfig = _download_kubeconfig(ocm_cmnd, metadata['cluster_id'], cluster_path)
-        if cluster_load and kubeconfig == "":
-            logging.error("Failed to download kubeconfig file. Disabling e2e-benchmarking execution on %s" % cluster_name)
+        if kubeconfig == "":
+            logging.error("Failed to download kubeconfig file. Disabling wait for workers and e2e-benchmarking execution on %s" % cluster_name)
+            wait_time = 0
             cluster_load = False
             metadata['status'] = "Ready. Not Access"
-        workers_ready = _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name)
-        if cluster_load and workers_ready != worker_nodes:
-            logging.error("Insufficient number of workers (%d). Expected: %d. Disabling e2e-benchmarking execution on %s" % (workers_ready, worker_nodes, cluster_name))
+        if wait_time != 0:
+            logging.info("Waiting %d minutes for %d workers to be ready on %s" % (wait_time, worker_nodes, cluster_name))
+            workers_ready = _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name)
+            cluster_workers_ready = int(time.time())
+            logging.info("%d workers ready after %d minutes on %s" % (workers_ready, cluster_workers_ready - cluster_start_time, cluster_name))
+            if cluster_load and workers_ready != worker_nodes:
+                logging.error("Insufficient number of workers (%d). Expected: %d. Disabling e2e-benchmarking execution on %s" % (workers_ready, worker_nodes, cluster_name))
+                cluster_load = False
+                metadata['status'] = "Ready. No Workers"
+            metadata['workers_ready'] = cluster_workers_ready - cluster_start_time if workers_ready == worker_nodes else ""
+        else:
             cluster_load = False
-            metadata['status'] = "Ready. No Workers"
-        cluster_workers_ready = int(time.time())
-        metadata['workers_ready'] = cluster_workers_ready - cluster_start_time if workers_ready == worker_nodes else ""
+            metadata['workers_ready'] = "None"
     else:
         cluster_end_time = int(time.time())
         logging.error("Failed to install cluster %s" % cluster_name)
@@ -664,6 +671,7 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
                     break
             elif not cluster_load:
                 logging.info('All clusters on ready status and no loading process required. Waiting 5 extra minutes to allow all cluster installations to finish.')
+                all_clusters_installed.notify_all()
                 time.sleep(300)
                 break
             else:
@@ -697,7 +705,7 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
     process_oidc = subprocess.Popen(delete_oidc_providers, stdout=cleanup_log, stderr=cleanup_log)
     stdout, stderr = process_oidc.communicate()
     if process_oidc.returncode != 0:
-        logging.error("Failed to delete operator roles on cluster %s" % cluster_name)
+        logging.error("Failed to delete identity providers on cluster %s" % cluster_name)
     cluster_end_time = int(time.time())
     metadata['install_method'] = "rosa"
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
@@ -820,7 +828,7 @@ def main():
         '--workers-wait-time',
         type=int,
         default=15,
-        help="Waiting time in minutes for the workers to be Ready after cluster installation. Default: 15 minutes")
+        help="Waiting time in minutes for the workers to be Ready after cluster installation.. If 0, do not wait. Default: 15 minutes")
     parser.add_argument(
         '--terraform-cli',
         type=str,
@@ -864,6 +872,9 @@ def main():
         logging.info('Logging to file: %s' % args.log_file)
     else:
         logging.info('Logging to console')
+
+    if args.add_cluster_load and args.workers_wait_time == 0:
+        parser.error("Workers wait time > 0 expected when --add-cluster-load is used")
 
     # global uuid to assign for the group of clusters created. each cluster will have its own cluster-id
     my_uuid = args.uuid
