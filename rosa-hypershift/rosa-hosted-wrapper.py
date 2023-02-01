@@ -171,11 +171,11 @@ def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, 
             number_of_public = len(json_output['outputs']['cluster-public-subnet']['value'])
             number_of_private = len(json_output['outputs']['cluster-private-subnet']['value'])
             if number_of_vpcs != cluster_count or number_of_public != cluster_count or number_of_private != cluster_count:
-                logging.error("Required Clusters: %d" % cluster_count)
-                logging.error('Number of VPCs: %d' % number_of_vpcs)
-                logging.error('Number of Private Subnets: %d' % number_of_private)
-                logging.error('Number of Public Subnets: %d' % number_of_public)
-                logging.error('Try %d: Not all resources has been created. retring in 15 seconds' % trying)
+                logging.info("Required Clusters: %d" % cluster_count)
+                logging.info('Number of VPCs: %d' % number_of_vpcs)
+                logging.info('Number of Private Subnets: %d' % number_of_private)
+                logging.info('Number of Public Subnets: %d' % number_of_public)
+                logging.warning('Try %d: Not all resources has been created. retring in 15 seconds' % trying)
                 time.sleep(15)
             else:
                 for cluster in range(cluster_count):
@@ -186,8 +186,9 @@ def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, 
                     vpcs.append((vpc_id, public_subnet, private_subnet))
                 return vpcs
         else:
-            logging.error('Try: %d. %s unable to execute apply, retrying in 15 seconds' % (trying, terraform))
+            logging.warning('Try: %d. %s unable to execute apply, retrying in 15 seconds' % (trying, terraform))
             time.sleep(15)
+    logging.error('Failed to appy terraform plan after %d retries' % retries)
     return 1
 
 
@@ -217,7 +218,6 @@ def _delete_security_groups(aws_region, my_path, vpc_id):
     logging.debug(sec_groups_command)
     sec_groups_process = subprocess.Popen(sec_groups_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     sec_groups_stdout, sec_groups_stderr = sec_groups_process.communicate()
-    logging.debug(sec_groups_stdout)
     if sec_groups_process.returncode == 0:
         for secgroup in json.loads(sec_groups_stdout.decode("utf-8"))['SecurityGroups']:
             logging.info("Security GroupID: %s" % secgroup['GroupId'])
@@ -358,44 +358,55 @@ def _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, my_path):
     logging.info('Creating cluster-admin user on cluster %s (100 retries allowed)' % cluster_name)
     kubeconfig_cmd = [rosa_cmnd,  "create", "admin", "-c", cluster_name, "-o", "json"]
     logging.debug(kubeconfig_cmd)
+    cluster_admin_create_time = int(time.time())
     for trying in range(1, 101):
         process = subprocess.Popen(kubeconfig_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
-        cluster_admin_create_time = int(time.time())
         stdout, stderr = process.communicate()
         if process.returncode != 0:
-            logging.error('Try: %d. Failed to create cluster-admin user on %s with this stdout/stderr:' % (trying, cluster_name))
-            logging.error(stdout)
-            logging.error(stderr)
+            logging.warning('Try: %d. Failed to create cluster-admin user on %s with this stdout/stderr:' % (trying, cluster_name))
+            logging.warning(stdout)
+            logging.warning(stderr)
             logging.error('Try: %d. Waiting 5 seconds for the next try on %s' % (trying, cluster_name))
             time.sleep(5)
-            return_data['cluster-admin-create'] = int(time.time()) - cluster_admin_create_time
         else:
-            logging.debug('Trying to login on cluster %s (100 retries allowed, 5s timeout on oc command)' % cluster_name)
+            return_data['cluster-admin-create'] = int(time.time()) - cluster_admin_create_time
+            logging.info('Trying to login on cluster %s (100 retries allowed, 5s timeout on oc command)' % cluster_name)
+            oc_login_time = int(time.time())
             for trying2 in range(1, 101):
                 oc_login_cmnd = ["oc", "login", json.loads(stdout)['api_url'], "--username", json.loads(stdout)['username'], "--password", json.loads(stdout)['password'], "--kubeconfig", my_path + "/kubeconfig", "--insecure-skip-tls-verify=true", "--request-timeout=30s"]
                 logging.debug(oc_login_cmnd)
-                oc_login_time = int(time.time())
                 process_oc_login = subprocess.Popen(oc_login_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
                 stdout_oc_login, stderr_oc_login = process_oc_login.communicate()
                 if process_oc_login.returncode != 0:
-                    logging.error('Try: %d. Failed to login on cluster %s with cluster-admin user with this stdout/stderr:' % (trying2, cluster_name))
-                    logging.error(stdout_oc_login)
-                    logging.error(stderr_oc_login)
-                    logging.error('Try: %d. Waiting 5 seconds for the next try on %s' % (trying2, cluster_name))
+                    logging.warning('Try: %d. Failed to login on cluster %s with cluster-admin user with this stdout/stderr:' % (trying2, cluster_name))
+                    logging.warning(stdout_oc_login)
+                    logging.warning(stderr_oc_login)
+                    logging.warning('Try: %d. Waiting 5 seconds for the next try on %s' % (trying2, cluster_name))
                     time.sleep(5)
                 else:
-                    logging.info("Try: %d. Login succesfull on cluster %s, checking if kubeconfig has been downloaded" % (trying2, cluster_name))
-                    with open(my_path + "/kubeconfig", "r") as kubeconfig_file:
-                        kubeconfig = kubeconfig_file.readlines()
-                        for line in kubeconfig:
-                            if json.loads(stdout)['api_url'] in line:
-                                logging.info("Try %d. Valid kubeconfig downloaded for %s" % (trying2, cluster_name))
-                                return_data['kubeconfig'] = my_path + "/kubeconfig"
-                                return_data['cluster-admin-login'] = int(time.time()) - oc_login_time
-                                return return_data
-                        logging.error("Try: %d. Kubeconfig %s is not valid for cluster %s" % (trying2, my_path + "/kubeconfig", cluster_name))
-                        logging.error('Try: %d. Waiting 5 seconds for the next try on %s' % (trying2, cluster_name))
-                        time.sleep(5)
+                    oc_adm_time_start = int(time.time())
+                    return_data['cluster-admin-login'] = int(time.time()) - oc_login_time
+                    return_data['kubeconfig'] = my_path + "/kubeconfig"
+                    logging.info("Try: %d. Login succesfull on cluster %s" % (trying2, cluster_name))
+                    myenv = os.environ.copy()
+                    myenv["KUBECONFIG"] = return_data['kubeconfig']
+                    oc_adm_cmnd = ["oc", "adm", "top", "images"]
+                    logging.debug(oc_adm_cmnd)
+                    for trying3 in range(1, 101):
+                        process_oc_adm = subprocess.Popen(oc_adm_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path,  universal_newlines=True, env=myenv)
+                        stdout_oc_adm, stderr_oc_adm = process_oc_adm.communicate()
+                        if process_oc_adm.returncode != 0:
+                            logging.warning("Try %d. Failed to perform oc adm command on %s with downloaded kubeconfig %s" % (trying3, cluster_name, my_path + "/kubeconfig"))
+                            logging.warning(stdout_oc_adm)
+                            logging.warning(stderr_oc_adm)
+                            logging.warning('Try: %d. Waiting 5 seconds for the next try on %s' % (trying3, cluster_name))
+                            time.sleep(5)
+                        else:
+                            logging.info("Try %d. Verified admin access to %s, using %s kubeconfig file." % (trying3, cluster_name, my_path + "/kubeconfig"))
+                            return_data['cluster-oc-adm'] = int(time.time()) - oc_adm_time_start
+                            return return_data
+                    logging.error("Failed to execute `oc adm top images` cluster %s after 100 retries. Exiting" % cluster_name)
+                    return return_data
             logging.error("Failed to login on cluster %s after 100 retries. Exiting" % cluster_name)
             return return_data
     logging.error("Failed to create cluster-admin user on cluster %s after 100 retries. Exiting" % cluster_name)
@@ -437,6 +448,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
         kubeconfig = return_data['kubeconfig'] if 'kubeconfig' in return_data else ""
         metadata['cluster-admin-create'] = return_data['cluster-admin-create'] if 'cluster-admin-create' in return_data else 0
         metadata['cluster-admin-login'] = return_data['cluster-admin-login'] if 'cluster-admin-login' in return_data else 0
+        metadata['cluster-oc-adm'] = return_data['cluster-oc-adm'] if 'cluster-oc-adm' in return_data else 0
         if kubeconfig == "":
             logging.error("Failed to download kubeconfig file. Disabling wait for workers and e2e-benchmarking execution on %s" % cluster_name)
             wait_time = 0
@@ -577,8 +589,6 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, l
     load_env["HOSTED_CLUSTER_NS"] = ".*-" + hosted_cluster_name
     if es_url is not None:
         load_env["ES_SERVER"] = es_url
-    load_env["PROM_URL"] = "https://thanos-query.apps.observability.perfscale.devcluster.openshift.com"
-    load_env["THANOS_RECEIVER_URL"] = "http://thanos.apps.observability.perfscale.devcluster.openshift.com/api/v1/receive"
     load_env["LOG_LEVEL"] = "debug"
     load_env["WORKLOAD"] = "cluster-density-ms"
     load_env["JOB_PAUSE"] = str(randrange(100, 1000)) + "s"
@@ -782,6 +792,99 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
         metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
         es_ignored_metadata = ""
         common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
+    if args.manually_cleanup_aws_iam:
+        aws_roles = _destroy_aws_iam_roles(cluster_name)
+        if aws_roles != 0:
+            logging.error("Failed to destroy AWS IAM Roles of %s (%s)" % (cluster_name, metadata['cluster_id']))
+        aws_oidc = _destroy_aws_iam_oidc(cluster_name, metadata['cluster_id'])
+        if aws_oidc != 0:
+            logging.error("Failed to destroy AWS IAM OIDC of %s (%s)" % (cluster_name, metadata['cluster_id']))
+
+
+def _destroy_aws_iam_oidc(cluster_name, cluster_id):
+    logging.info("Geting AWS OpenID Providers of %s" % cluster_name)
+    oidc_list_cmnd = ["aws", "iam", "list-open-id-connect-providers", "--output", "json"]
+    logging.debug(oidc_list_cmnd)
+    oidc_list_process = subprocess.Popen(oidc_list_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    oidc_list_stdout, oidc_list_stderr = oidc_list_process.communicate()
+    return_code = 0
+    if oidc_list_process.returncode == 0:
+        for provider in json.loads(oidc_list_stdout.decode("utf-8"))['OpenIDConnectProviderList']:
+            if cluster_id in provider['Arn']:
+                logging.info("Deleting OIDC Provider %s of cluster: %s" % (provider['Arn'], cluster_name))
+                delete_oidc_cmnd = ["aws", "iam", "delete-open-id-connect-provider", "--open-id-connect-provider-arn", provider['Arn']]
+                logging.debug(delete_oidc_cmnd)
+                delete_oidc_process = subprocess.Popen(delete_oidc_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                delete_oidc_stdout, delete_oidc_stderr = delete_oidc_process.communicate()
+                if delete_oidc_process.returncode != 0:
+                    logging.error("Failed to delete OIDC provider %s for cluster %s" % (provider['Arn'], cluster_name))
+                    logging.error(delete_oidc_stdout)
+                    logging.error(delete_oidc_stderr)
+                    return_code += 1
+                else:
+                    logging.info("Deleted OIDC Provider %s for cluster %s" % (provider['Arn'], cluster_name))
+        return return_code
+    else:
+        logging.error("Failed to list OIDC Providers")
+        logging.error(oidc_list_stdout)
+        logging.error(oidc_list_stderr)
+        return 1
+
+
+def _destroy_aws_iam_roles(cluster_name):
+    logging.info("Geting AWS Roles of %s" % cluster_name)
+    roles_list_cmnd = ["aws", "iam", "list-roles", "--output", "json"]
+    logging.debug(roles_list_cmnd)
+    roles_list_process = subprocess.Popen(roles_list_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    roles_list_stdout, roles_list_stderr = roles_list_process.communicate()
+    if roles_list_process.returncode == 0:
+        return_code = 0
+        for role in json.loads(roles_list_stdout.decode("utf-8"))['Roles']:
+            if cluster_name in role['RoleName']:
+                logging.info("Listing attached policies of Role: %s" % role['RoleName'])
+                attached_role_policies_cmnd = ["aws", "iam", "list-attached-role-policies", "--role-name", role['RoleName'], "--output", "json"]
+                logging.debug(attached_role_policies_cmnd)
+                attached_role_policies_process = subprocess.Popen(attached_role_policies_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                attached_role_policies_stdout, attached_role_policies_stderr = attached_role_policies_process.communicate()
+                if attached_role_policies_process.returncode == 0:
+                    policy_detach_errors = 0
+                    for policy in json.loads(attached_role_policies_stdout.decode("utf-8"))['AttachedPolicies']:
+                        logging.info("Detaching policy %s from Role %s of %s cluster" % (policy['PolicyName'], role['RoleName'], cluster_name))
+                        policy_detach_command = ["aws", "iam", "detach-role-policy", "--role-name", role['RoleName'], "--policy-arn", policy['PolicyArn']]
+                        logging.debug(policy_detach_command)
+                        policy_detach_process = subprocess.Popen(policy_detach_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        policy_detach_stdout, policy_detach_stderr = policy_detach_process.communicate()
+                        if policy_detach_process.returncode != 0:
+                            logging.error("Failed to list dettach policy %s from role %s for cluster %s" % (policy['PolicyName'], role['RoleName'], cluster_name))
+                            logging.error(policy_detach_stdout)
+                            logging.error(policy_detach_stderr)
+                            policy_detach_errors += 1
+                        else:
+                            logging.info("Dettached policy %s from role %s for cluster %s" % (policy['PolicyName'], role['RoleName'], cluster_name))
+                    if policy_detach_errors == 0:
+                        logging.info("Deleting Role: %s" % role['RoleName'])
+                        delete_role_cmnd = ['aws', 'iam', 'delete-role', "--role-name", role['RoleName']]
+                        logging.debug(delete_role_cmnd)
+                        delete_role_process = subprocess.Popen(delete_role_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        delete_role_stdout, delete_role_stderr = delete_role_process.communicate()
+                        if delete_role_process.returncode != 0:
+                            logging.error("Failed to delete role %s for cluster %s" % (role['RoleName'], cluster_name))
+                            logging.error(delete_role_stdout)
+                            logging.error(delete_role_stderr)
+                            return_code += 1
+                        else:
+                            logging.info("Deleted role %s for cluster %s" % (role['RoleName'], cluster_name))
+                else:
+                    logging.error("Failed to list attached role policies of role %s for cluster %s" % (role['RoleName'], cluster_name))
+                    logging.error(attached_role_policies_stdout)
+                    logging.error(attached_role_policies_stderr)
+                    return_code += 1
+        return return_code
+    else:
+        logging.error("Failed to list aws roles")
+        logging.error(roles_list_stdout)
+        logging.error(roles_list_stderr)
+        return 1
 
 
 def main():
@@ -902,8 +1005,11 @@ def main():
     parser.add_argument(
         '--manually-cleanup-secgroups',
         action='store_true',
-        help='If selected, delete security groups before deleting the VPC'
-    )
+        help='If selected, delete security groups before deleting the VPC')
+    parser.add_argument(
+        '--manually-cleanup-aws-iam',
+        action='store_true',
+        help='If selected, delete AWS Roles and OpenID Providers from AWS')
 
     global args
     args = parser.parse_args()
@@ -1196,10 +1302,10 @@ def main():
                 else:
                     raise
 
-    if args.create_vpc:
-        destroy_result = _destroy_vpcs(terraform_cmnd, args.terraform_retry, my_path, args.aws_region, vpcs)
-        if destroy_result == 1:
-            logging.error("Failed to destroy all VPCs, please manually delete them")
+        if args.create_vpc:
+            destroy_result = _destroy_vpcs(terraform_cmnd, args.terraform_retry, my_path, args.aws_region, vpcs)
+            if destroy_result == 1:
+                logging.error("Failed to destroy all VPCs, please manually delete them")
 
     if args.cleanup:
         logging.info('Cleaning working directory %s' % my_path)
