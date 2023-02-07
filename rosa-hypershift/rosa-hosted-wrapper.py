@@ -120,9 +120,147 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
     if ocm_process.returncode != 0:
         logging.error('%s unable to execute -h' % ocm_cmnd)
         logging.error(ocm_stderr.strip().decode("utf-8"))
-        return 1
+        exit(1)
     logging.info('ocm command validated with -h. Directory is %s' % my_path)
     return (ocm_cmnd, rosa_cmnd)
+
+
+def _verify_terraform(terraform_cmnd, my_path):
+    logging.info('Testing terraform command with: terraform -version')
+    terraform_cmd = [terraform_cmnd, "-version"]
+    terraform_log = open(my_path + "/" + 'terraform-version.log', 'w')
+    terraform_process = subprocess.Popen(terraform_cmd, stdout=terraform_log, stderr=terraform_log)
+    terraform_stdout, terraform_stderr = terraform_process.communicate()
+    if terraform_process.returncode != 0:
+        logging.error('%s unable to execute -version' % terraform_cmnd)
+        exit(1)
+    logging.info('terraform command validated with -version. Directory is %s' % my_path)
+    return terraform_cmnd
+
+
+def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, aws_region):
+    logging.info('Initializing Terraform with: terraform init')
+    terraform_init = [terraform, "init"]
+    terraform_log = open(my_path + "/terraform/" + 'terraform-apply.log', 'w')
+    terraform_init_process = subprocess.Popen(terraform_init, cwd=my_path + "/terraform", stdout=terraform_log, stderr=terraform_log)
+    terraform_init_stdout, terraform_init_stderr = terraform_init_process.communicate()
+    if terraform_init_process.returncode != 0:
+        logging.error('Failed to initialize terraform on %s' % my_path + "/terraform")
+        return 1
+    logging.info('Applying terraform plan command with: terraform apply for %s cluster, using %s as name seed on %s' % (cluster_count, cluster_name_seed, aws_region))
+    for trying in range(1, retries + 1):
+        myenv = os.environ.copy()
+        myenv["TF_VAR_cluster_name_seed"] = cluster_name_seed
+        myenv["TF_VAR_cluster_count"] = str(cluster_count)
+        myenv["TF_VAR_aws_region"] = aws_region
+        terraform_apply = [terraform, "apply", "--auto-approve"]
+        terraform_apply_process = subprocess.Popen(terraform_apply, cwd=my_path + "/terraform", stdout=terraform_log, stderr=terraform_log, env=myenv)
+        terraform_apply_stdout, terraform_apply_stderr = terraform_apply_process.communicate()
+        if terraform_apply_process.returncode == 0:
+            logging.info('Applied terraform plan command with: terraform apply')
+            try:
+                with open(my_path + "/terraform/terraform.tfstate", "r") as terraform_file:
+                    json_output = json.load(terraform_file)
+            except Exception as err:
+                logging.error(err)
+                logging.error('Try: %d. Failed to read terraform output file %s' % (my_path + "/terraform/terraform.tfstate"))
+                return 1
+            vpcs = []
+            # Check if we have IDs for everything
+            number_of_vpcs = len(json_output['outputs']['vpc-id']['value'])
+            number_of_public = len(json_output['outputs']['cluster-public-subnet']['value'])
+            number_of_private = len(json_output['outputs']['cluster-private-subnet']['value'])
+            if number_of_vpcs != cluster_count or number_of_public != cluster_count or number_of_private != cluster_count:
+                logging.info("Required Clusters: %d" % cluster_count)
+                logging.info('Number of VPCs: %d' % number_of_vpcs)
+                logging.info('Number of Private Subnets: %d' % number_of_private)
+                logging.info('Number of Public Subnets: %d' % number_of_public)
+                logging.warning('Try %d: Not all resources has been created. retring in 15 seconds' % trying)
+                time.sleep(15)
+            else:
+                for cluster in range(cluster_count):
+                    vpc_id = json_output['outputs']['vpc-id']['value'][cluster]
+                    public_subnet = json_output['outputs']['cluster-public-subnet']['value'][cluster]
+                    private_subnet = json_output['outputs']['cluster-private-subnet']['value'][cluster]
+                    logging.debug("VPC ID: %s, Public Subnet: %s, Private Subnet: %s" % (vpc_id, public_subnet, private_subnet))
+                    vpcs.append((vpc_id, public_subnet, private_subnet))
+                return vpcs
+        else:
+            logging.warning('Try: %d. %s unable to execute apply, retrying in 15 seconds' % (trying, terraform))
+            time.sleep(15)
+    logging.error('Failed to appy terraform plan after %d retries' % retries)
+    return 1
+
+
+def _destroy_vpcs(terraform, retries, my_path, aws_region, vpcs):
+    terraform_destroy = [terraform, "destroy", "--auto-approve"]
+    terraform_log = open(my_path + "/terraform/" + 'terraform-destroy.log', 'w')
+    for trying in range(1, retries + 1):
+        if args.manually_cleanup_secgroups:
+            for cluster in vpcs:
+                logging.info("Try: %d. Starting manually destroy of security groups" % trying)
+                _delete_security_groups(aws_region, my_path, cluster[0])
+        logging.info("Try: %d. Starting terraform destroy process" % trying)
+        terraform_destroy_process = subprocess.Popen(terraform_destroy, cwd=my_path + "/terraform", stdout=terraform_log, stderr=terraform_log)
+        terraform_destroy_stdout, terraform_destroy_stderr = terraform_destroy_process.communicate()
+        if terraform_destroy_process.returncode == 0:
+            logging.info("Try: %d. All VPCs destroyed" % trying)
+            return 0
+        else:
+            logging.error('Try: %d. Failed to execute %s destroy, retrying in 15 seconds' % (trying, terraform))
+            time.sleep(15)
+    return 1
+
+
+def _delete_security_groups(aws_region, my_path, vpc_id):
+    aws_log = open(my_path + "/terraform/" + 'aws_delete_sec_groups.log', 'w')
+    sec_groups_command = ["aws", "ec2", "describe-security-groups", "--filters", "Name=vpc-id,Values=" + vpc_id, "Name=group-name,Values=default,k8s*", "--region=" + aws_region, "--output", "json"]
+    logging.debug(sec_groups_command)
+    sec_groups_process = subprocess.Popen(sec_groups_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    sec_groups_stdout, sec_groups_stderr = sec_groups_process.communicate()
+    if sec_groups_process.returncode == 0:
+        for secgroup in json.loads(sec_groups_stdout.decode("utf-8"))['SecurityGroups']:
+            logging.info("Security GroupID: %s" % secgroup['GroupId'])
+            sec_groups_rules_command = ["aws", "ec2", "describe-security-group-rules", "--filters", "Name=group-id,Values=" + secgroup['GroupId'], "--region=" + aws_region, "--output", "json"]
+            logging.debug(sec_groups_rules_command)
+            sec_groups_rules_process = subprocess.Popen(sec_groups_rules_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            sec_groups_rules_stdout, sec_groups_rules_stderr = sec_groups_rules_process.communicate()
+            if sec_groups_rules_process.returncode == 0:
+                for secgrouprule in json.loads(sec_groups_rules_stdout.decode("utf-8"))['SecurityGroupRules']:
+                    if secgroup['GroupName'] == 'default':
+                        logging.info("Security Group Rule ID: %s of %s" % (secgrouprule['SecurityGroupRuleId'], secgroup['GroupId']))
+                        sec_groups_rule_delete_command = ["aws", "ec2", "revoke-security-group-ingress", "--region=" + aws_region, "--group-id", secgroup['GroupId'], "--security-group-rule-ids", secgrouprule['SecurityGroupRuleId']]
+                        logging.debug(sec_groups_rule_delete_command)
+                        sec_groups_rule_delete_process = subprocess.Popen(sec_groups_rule_delete_command, stdout=aws_log, stderr=aws_log)
+                        sec_groups_rule_delete_stdout, sec_groups_rule_delete_stderr = sec_groups_rule_delete_process.communicate()
+                        if sec_groups_rule_delete_process.returncode != 0:
+                            logging.error("Failed to revoke rule %s on Security Group %s" % (secgrouprule['SecurityGroupRuleId'], secgroup['GroupId']))
+                            logging.error(sec_groups_rule_delete_stderr)
+                            logging.error(sec_groups_rule_delete_stdout)
+                        else:
+                            logging.error("Revoked rule %s on Security Group %s" % (secgrouprule['SecurityGroupRuleId'], secgroup['GroupId']))
+                    else:
+                        logging.info("Deleting Security Group: %s" % secgroup['GroupName'])
+                        sec_groups_delete_command = ["aws", "ec2", "delete-security-group", "--region=" + aws_region, "--group-id", secgroup['GroupId']]
+                        logging.debug(sec_groups_delete_command)
+                        sec_groups_delete_process = subprocess.Popen(sec_groups_delete_command, stdout=aws_log, stderr=aws_log)
+                        sec_groups_delete_stdout, sec_groups_delete_stderr = sec_groups_delete_process.communicate()
+                        if sec_groups_delete_process.returncode != 0:
+                            logging.error("Failed to delete Security Group %s" % secgroup['GroupName'])
+                            logging.error(sec_groups_delete_stdout)
+                            logging.error(sec_groups_delete_stderr)
+                        else:
+                            logging.info("Deleted Security Group %s" % secgroup['GroupName'])
+            else:
+                logging.error("Failed to describe rules for Security Group %s" % secgroup['GroupId'])
+                logging.error(sec_groups_rules_stderr)
+                logging.error(sec_groups_rules_stdout)
+                return 1
+    else:
+        logging.error("Failed to describe security groups")
+        logging.error(sec_groups_stdout)
+        logging.error(sec_groups_stderr)
+        return 1
 
 
 def _get_provision_shard(ocm_cmnd, cluster_name, aws_region):
@@ -156,7 +294,7 @@ def _get_provision_shard(ocm_cmnd, cluster_name, aws_region):
 
 
 def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster, org_id, aws_region, es, index, index_retry, uuid, hostedclusters):
-    logging.info('Searching for Management Clusters on Org %s installed on %s AWS region' % (org_id, aws_region))
+    logging.info('Searching for Management/Service Clusters on Org %s installed on %s AWS region' % (org_id, aws_region))
     ocm_command = [ocm_cmnd, "get", "/api/clusters_mgmt/v1/clusters?search=organization.id+is+%27" + org_id + "%27+and+region.id+is+%27" + aws_region + "%27"]
     logging.debug(ocm_command)
     ocm_process = subprocess.Popen(ocm_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -186,17 +324,16 @@ def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster, org_id, aws_region, es, index
                 metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
                 metadata['hostedclusters'] = hostedclusters
                 metadata['install_method'] = "rosa"
-                metadata['provision_shard'] = _get_provision_shard(ocm_cmnd, metadata['cluster_name'], aws_region)
                 es_ignored_metadata = ""
                 if es is not None:
                     common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
         if metadata == {}:
-            logging.error("Management Cluster %s not found for Org %s on %s AWS region" % (mgmt_cluster, org_id, aws_region))
+            logging.error("Management/Service Cluster %s not found for Org %s on %s AWS region" % (mgmt_cluster, org_id, aws_region))
             exit(1)
     return metadata
 
 
-def _download_kubeconfig(ocm_cmnd, cluster_id, my_path):
+def _download_kubeconfig(ocm_cmnd, cluster_id, my_path, type):
     logging.debug('Downloading kubeconfig file for Cluster %s on %s' % (cluster_id, my_path))
     kubeconfig_cmd = [ocm_cmnd, "get", "/api/clusters_mgmt/v1/clusters/" + cluster_id + "/credentials"]
     logging.debug(kubeconfig_cmd)
@@ -208,21 +345,125 @@ def _download_kubeconfig(ocm_cmnd, cluster_id, my_path):
         logging.error(stderr)
         return ""
     else:
-        kubeconfig_path = my_path + "/kubeconfig"
+        kubeconfig_path = my_path + "/kubeconfig_" + type
         with open(kubeconfig_path, "w") as kubeconfig_file:
             kubeconfig_file.write(json.loads(stdout)['kubeconfig'])
         logging.debug('Downloaded kubeconfig file for Cluster ID %s and stored at %s' % (cluster_id, kubeconfig_path))
         return kubeconfig_path
 
 
-def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, all_clusters_installed):
+def _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, my_path):
+    return_data = {}
+    logging.info('Creating cluster-admin user on cluster %s (100 retries allowed)' % cluster_name)
+    kubeconfig_cmd = [rosa_cmnd,  "create", "admin", "-c", cluster_name, "-o", "json"]
+    logging.debug(kubeconfig_cmd)
+    cluster_admin_create_time = int(time.time())
+    for trying in range(1, 101):
+        process = subprocess.Popen(kubeconfig_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
+        stdout, stderr = process.communicate()
+        if process.returncode != 0:
+            logging.warning('Try: %d. Failed to create cluster-admin user on %s with this stdout/stderr:' % (trying, cluster_name))
+            logging.warning(stdout)
+            logging.warning(stderr)
+            logging.error('Try: %d. Waiting 5 seconds for the next try on %s' % (trying, cluster_name))
+            time.sleep(5)
+        else:
+            return_data['cluster-admin-create'] = int(time.time()) - cluster_admin_create_time
+            logging.info('Trying to login on cluster %s (100 retries allowed, 5s timeout on oc command)' % cluster_name)
+            oc_login_time = int(time.time())
+            for trying2 in range(1, 101):
+                oc_login_cmnd = ["oc", "login", json.loads(stdout)['api_url'], "--username", json.loads(stdout)['username'], "--password", json.loads(stdout)['password'], "--kubeconfig", my_path + "/kubeconfig", "--insecure-skip-tls-verify=true", "--request-timeout=30s"]
+                logging.debug(oc_login_cmnd)
+                process_oc_login = subprocess.Popen(oc_login_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
+                stdout_oc_login, stderr_oc_login = process_oc_login.communicate()
+                if process_oc_login.returncode != 0:
+                    logging.warning('Try: %d. Failed to login on cluster %s with cluster-admin user with this stdout/stderr:' % (trying2, cluster_name))
+                    logging.warning(stdout_oc_login)
+                    logging.warning(stderr_oc_login)
+                    logging.warning('Try: %d. Waiting 5 seconds for the next try on %s' % (trying2, cluster_name))
+                    time.sleep(5)
+                else:
+                    oc_adm_time_start = int(time.time())
+                    return_data['cluster-admin-login'] = int(time.time()) - oc_login_time
+                    return_data['kubeconfig'] = my_path + "/kubeconfig"
+                    logging.info("Try: %d. Login succesfull on cluster %s" % (trying2, cluster_name))
+                    myenv = os.environ.copy()
+                    myenv["KUBECONFIG"] = return_data['kubeconfig']
+                    oc_adm_cmnd = ["oc", "adm", "top", "images"]
+                    logging.debug(oc_adm_cmnd)
+                    for trying3 in range(1, 101):
+                        process_oc_adm = subprocess.Popen(oc_adm_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path,  universal_newlines=True, env=myenv)
+                        stdout_oc_adm, stderr_oc_adm = process_oc_adm.communicate()
+                        if process_oc_adm.returncode != 0:
+                            logging.warning("Try %d. Failed to perform oc adm command on %s with downloaded kubeconfig %s" % (trying3, cluster_name, my_path + "/kubeconfig"))
+                            logging.warning(stdout_oc_adm)
+                            logging.warning(stderr_oc_adm)
+                            logging.warning('Try: %d. Waiting 5 seconds for the next try on %s' % (trying3, cluster_name))
+                            time.sleep(5)
+                        else:
+                            logging.info("Try %d. Verified admin access to %s, using %s kubeconfig file." % (trying3, cluster_name, my_path + "/kubeconfig"))
+                            return_data['cluster-oc-adm'] = int(time.time()) - oc_adm_time_start
+                            return return_data
+                    logging.error("Failed to execute `oc adm top images` cluster %s after 100 retries. Exiting" % cluster_name)
+                    return return_data
+            logging.error("Failed to login on cluster %s after 100 retries. Exiting" % cluster_name)
+            return return_data
+    logging.error("Failed to create cluster-admin user on cluster %s after 100 retries. Exiting" % cluster_name)
+    return return_data
+
+
+def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
+    logging.info('Capturing namespace creation time on %s Cluster for %s' % (type, cluster_name))
+    start_time = int(time.time())
+    myenv = os.environ.copy()
+    myenv["KUBECONFIG"] = kubeconfig
+    projects_cmnd = ["oc", "get", "projects", "--output", "json"]
+    for trying in range(1, 101):
+        projects_process = subprocess.Popen(projects_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=myenv)
+        logging.debug(projects_cmnd)
+        projects_process_stdout, projects_process_stderr = projects_process.communicate()
+        if projects_process.returncode != 0:
+            logging.warning(projects_process_stdout)
+            logging.warning(projects_process_stderr)
+            logging.warning("Try: %d. Failed to get the project list on the %s Cluster. Retrying in 5 seconds" % (trying, type))
+            time.sleep(5)
+        else:
+            try:
+                projects_json = json.loads(projects_process_stdout)
+            except Exception as err:
+                logging.warning(projects_process_stdout)
+                logging.warning(projects_process_stderr)
+                logging.warning(err)
+                logging.warning("Try: %d. Failed to get the project list on the %s Cluster. Retrying in 5 seconds" % (trying, type))
+                time.sleep(5)
+                continue
+            projects = projects_json['items'] if 'items' in projects_json else []
+            namespace_count = 0
+            for project in projects:
+                if 'metadata' in project and 'name' in project['metadata'] and cluster_id in project['metadata']['name']:
+                    namespace_count += 1
+            if (type == "Service" and namespace_count == 2) or (type == "Management" and namespace_count == 3):
+                end_time = int(time.time())
+                logging.info("Try: %d. Namespace for %s created in %s cluster in %d seconds" % (trying, cluster_name, type, (end_time - start_time)))
+                return end_time - start_time
+            else:
+                logging.warning("Try: %d. Namespace for %s not found in %s Cluster. Retrying in 5 seconds" % (trying, cluster_name, type))
+                time.sleep(5)
+    logging.error("Failed to get namespace for %s on the %s cluster after 100 retries" % (cluster_name, type))
+    return 0
+
+
+def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed):
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
     os.mkdir(cluster_path)
     logging.debug('Attempting cluster installation')
     logging.debug('Output directory set to %s' % cluster_path)
     cluster_name = cluster_name_seed + "-" + str(my_inc).zfill(4)
-    cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, "--replicas", str(worker_nodes), "--hosted-cp", "--sts", "--mode", "auto", "-y"]
+    cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, "--replicas", str(worker_nodes), "--hosted-cp", "--sts", "--mode", "auto", "-y", "--output", "json"]
+    if create_vpc:
+        cluster_cmd.append("--subnet-ids")
+        cluster_cmd.append(vpc_info[1] + "," + vpc_info[2])
     if provision_shard:
         cluster_cmd.append("--properties")
         cluster_cmd.append("provision_shard_id:" + provision_shard)
@@ -237,24 +478,40 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
     stdout, stderr = process.communicate()
     metadata = {}
     if process.returncode == 0:
+        metadata = get_metadata(cluster_name, rosa_cmnd)
+        sc_namespace_timing = _namespace_wait(sc_kubeconfig, metadata['cluster_id'], cluster_name, "Service") if sc_kubeconfig != "" else 0
+        mgmt_namespace_timing = _namespace_wait(mgmt_kubeconfig, metadata['cluster_id'], cluster_name, "Management") if mgmt_kubeconfig != "" else 0
         watch_cmd = [rosa_cmnd, "logs", "install", "-c", cluster_name, "--watch"]
         logging.debug(watch_cmd)
         watch_process = subprocess.Popen(watch_cmd, stdout=installation_log, stderr=installation_log)
         watch_stdout, watch_stderr = watch_process.communicate()
         cluster_end_time = int(time.time())
-        metadata = get_metadata(cluster_name, rosa_cmnd)
-        kubeconfig = _download_kubeconfig(ocm_cmnd, metadata['cluster_id'], cluster_path)
-        if cluster_load and kubeconfig == "":
-            logging.error("Failed to download kubeconfig file. Disabling e2e-benchmarking execution on %s" % cluster_name)
+        return_data = _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, cluster_path)
+        kubeconfig = return_data['kubeconfig'] if 'kubeconfig' in return_data else ""
+        metadata['cluster-admin-create'] = return_data['cluster-admin-create'] if 'cluster-admin-create' in return_data else 0
+        metadata['cluster-admin-login'] = return_data['cluster-admin-login'] if 'cluster-admin-login' in return_data else 0
+        metadata['cluster-oc-adm'] = return_data['cluster-oc-adm'] if 'cluster-oc-adm' in return_data else 0
+        metadata['mgmt_namespace'] = mgmt_namespace_timing
+        metadata['sc_namespace'] = sc_namespace_timing
+        if kubeconfig == "":
+            logging.error("Failed to download kubeconfig file. Disabling wait for workers and e2e-benchmarking execution on %s" % cluster_name)
+            wait_time = 0
             cluster_load = False
             metadata['status'] = "Ready. Not Access"
-        workers_ready = _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name)
-        if cluster_load and workers_ready != worker_nodes:
-            logging.error("Insufficient number of workers (%d). Expected: %d. Disabling e2e-benchmarking execution on %s" % (workers_ready, worker_nodes, cluster_name))
+        if wait_time != 0:
+            logging.info("Waiting %d minutes for %d workers to be ready on %s" % (wait_time, worker_nodes, cluster_name))
+            workers_ready = _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name)
+            cluster_workers_ready = int(time.time())
+            logging.info("%d workers ready after %d minutes on %s" % (workers_ready, cluster_workers_ready - cluster_start_time, cluster_name))
+            if cluster_load and workers_ready != worker_nodes:
+                logging.error("Insufficient number of workers (%d). Expected: %d. Disabling e2e-benchmarking execution on %s" % (workers_ready, worker_nodes, cluster_name))
+                cluster_load = False
+                metadata['status'] = "Ready. No Workers"
+            metadata['workers_ready'] = cluster_workers_ready - cluster_start_time if workers_ready == worker_nodes else ""
+        else:
+            logging.info("Cluster %s ready. Not waiting for workers to be ready. Setting workers_ready to 0 on ES Document" % cluster_name)
+            metadata['workers_ready'] = 0
             cluster_load = False
-            metadata['status'] = "Ready. No Workers"
-        cluster_workers_ready = int(time.time())
-        metadata['workers_ready'] = cluster_workers_ready - cluster_start_time if workers_ready == worker_nodes else ""
     else:
         cluster_end_time = int(time.time())
         logging.error("Failed to install cluster %s" % cluster_name)
@@ -334,8 +591,9 @@ def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name):
         try:
             nodes_json = json.loads(nodes_stdout)
         except Exception as err:
-            logging.error("Cannot load command result for cluster %s" % cluster_name)
+            logging.error("Cannot load command result for cluster %s. Waiting 15 seconds for next check..." % cluster_name)
             logging.error(err)
+            time.sleep(15)
             continue
         nodes = nodes_json['items'] if 'items' in nodes_json else []
         status = []
@@ -371,12 +629,10 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, l
     load_env["CLEANUP_WHEN_FINISH"] = "true"
     load_env["INDEXING"] = "true"
     load_env["HYPERSHIFT"] = "true"
-    load_env["MGMT_CLUSTER_NAME"] = mgmt_cluster_name
+    load_env["MGMT_CLUSTER_NAME"] = mgmt_cluster_name + "-.*"
     load_env["HOSTED_CLUSTER_NS"] = ".*-" + hosted_cluster_name
     if es_url is not None:
         load_env["ES_SERVER"] = es_url
-    load_env["PROM_URL"] = "https://thanos-query.apps.observability.perfscale.devcluster.openshift.com"
-    load_env["THANOS_RECEIVER_URL"] = "http://thanos.apps.observability.perfscale.devcluster.openshift.com/api/v1/receive"
     load_env["LOG_LEVEL"] = "debug"
     load_env["WORKLOAD"] = "cluster-density-ms"
     load_env["JOB_PAUSE"] = str(randrange(100, 1000)) + "s"
@@ -549,11 +805,14 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
     delete_operator_roles = [rosa_cmnd, "delete", "operator-roles", "-c", cluster_name, "-m", "auto", "-y"]
     process_operator = subprocess.Popen(delete_operator_roles, stdout=cleanup_log, stderr=cleanup_log)
     stdout, stderr = process_operator.communicate()
+    if process_operator.returncode != 0:
+        logging.error("Failed to delete operator roles on cluster %s" % cluster_name)
     delete_oidc_providers = [rosa_cmnd, "delete", "oidc-provider", "-c", cluster_name, "-m", "auto", "-y"]
     process_oidc = subprocess.Popen(delete_oidc_providers, stdout=cleanup_log, stderr=cleanup_log)
     stdout, stderr = process_oidc.communicate()
+    if process_oidc.returncode != 0:
+        logging.error("Failed to delete identity providers on cluster %s" % cluster_name)
     cluster_end_time = int(time.time())
-
     metadata['install_method'] = "rosa"
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
     metadata['duration'] = cluster_delete_end_time - cluster_start_time
@@ -566,7 +825,7 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
         logging.error('Hosted cluster destroy failed for cluster name %s with this stdout/stderr:' % cluster_name)
         logging.error(stdout)
         logging.error(stderr)
-        return 1
+        metadata['status'] = "not deleted"
     try:
         with open(my_path + "/" + cluster_name + "/metadata_destroy.json", "w") as metadata_file:
             json.dump(metadata, metadata_file)
@@ -577,6 +836,99 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
         metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
         es_ignored_metadata = ""
         common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
+    if args.manually_cleanup_aws_iam:
+        aws_roles = _destroy_aws_iam_roles(cluster_name)
+        if aws_roles != 0:
+            logging.error("Failed to destroy AWS IAM Roles of %s (%s)" % (cluster_name, metadata['cluster_id']))
+        aws_oidc = _destroy_aws_iam_oidc(cluster_name, metadata['cluster_id'])
+        if aws_oidc != 0:
+            logging.error("Failed to destroy AWS IAM OIDC of %s (%s)" % (cluster_name, metadata['cluster_id']))
+
+
+def _destroy_aws_iam_oidc(cluster_name, cluster_id):
+    logging.info("Geting AWS OpenID Providers of %s" % cluster_name)
+    oidc_list_cmnd = ["aws", "iam", "list-open-id-connect-providers", "--output", "json"]
+    logging.debug(oidc_list_cmnd)
+    oidc_list_process = subprocess.Popen(oidc_list_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    oidc_list_stdout, oidc_list_stderr = oidc_list_process.communicate()
+    return_code = 0
+    if oidc_list_process.returncode == 0:
+        for provider in json.loads(oidc_list_stdout.decode("utf-8"))['OpenIDConnectProviderList']:
+            if cluster_id in provider['Arn']:
+                logging.info("Deleting OIDC Provider %s of cluster: %s" % (provider['Arn'], cluster_name))
+                delete_oidc_cmnd = ["aws", "iam", "delete-open-id-connect-provider", "--open-id-connect-provider-arn", provider['Arn']]
+                logging.debug(delete_oidc_cmnd)
+                delete_oidc_process = subprocess.Popen(delete_oidc_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                delete_oidc_stdout, delete_oidc_stderr = delete_oidc_process.communicate()
+                if delete_oidc_process.returncode != 0:
+                    logging.error("Failed to delete OIDC provider %s for cluster %s" % (provider['Arn'], cluster_name))
+                    logging.error(delete_oidc_stdout)
+                    logging.error(delete_oidc_stderr)
+                    return_code += 1
+                else:
+                    logging.info("Deleted OIDC Provider %s for cluster %s" % (provider['Arn'], cluster_name))
+        return return_code
+    else:
+        logging.error("Failed to list OIDC Providers")
+        logging.error(oidc_list_stdout)
+        logging.error(oidc_list_stderr)
+        return 1
+
+
+def _destroy_aws_iam_roles(cluster_name):
+    logging.info("Geting AWS Roles of %s" % cluster_name)
+    roles_list_cmnd = ["aws", "iam", "list-roles", "--output", "json"]
+    logging.debug(roles_list_cmnd)
+    roles_list_process = subprocess.Popen(roles_list_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    roles_list_stdout, roles_list_stderr = roles_list_process.communicate()
+    if roles_list_process.returncode == 0:
+        return_code = 0
+        for role in json.loads(roles_list_stdout.decode("utf-8"))['Roles']:
+            if cluster_name in role['RoleName']:
+                logging.info("Listing attached policies of Role: %s" % role['RoleName'])
+                attached_role_policies_cmnd = ["aws", "iam", "list-attached-role-policies", "--role-name", role['RoleName'], "--output", "json"]
+                logging.debug(attached_role_policies_cmnd)
+                attached_role_policies_process = subprocess.Popen(attached_role_policies_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                attached_role_policies_stdout, attached_role_policies_stderr = attached_role_policies_process.communicate()
+                if attached_role_policies_process.returncode == 0:
+                    policy_detach_errors = 0
+                    for policy in json.loads(attached_role_policies_stdout.decode("utf-8"))['AttachedPolicies']:
+                        logging.info("Detaching policy %s from Role %s of %s cluster" % (policy['PolicyName'], role['RoleName'], cluster_name))
+                        policy_detach_command = ["aws", "iam", "detach-role-policy", "--role-name", role['RoleName'], "--policy-arn", policy['PolicyArn']]
+                        logging.debug(policy_detach_command)
+                        policy_detach_process = subprocess.Popen(policy_detach_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        policy_detach_stdout, policy_detach_stderr = policy_detach_process.communicate()
+                        if policy_detach_process.returncode != 0:
+                            logging.error("Failed to list dettach policy %s from role %s for cluster %s" % (policy['PolicyName'], role['RoleName'], cluster_name))
+                            logging.error(policy_detach_stdout)
+                            logging.error(policy_detach_stderr)
+                            policy_detach_errors += 1
+                        else:
+                            logging.info("Dettached policy %s from role %s for cluster %s" % (policy['PolicyName'], role['RoleName'], cluster_name))
+                    if policy_detach_errors == 0:
+                        logging.info("Deleting Role: %s" % role['RoleName'])
+                        delete_role_cmnd = ['aws', 'iam', 'delete-role', "--role-name", role['RoleName']]
+                        logging.debug(delete_role_cmnd)
+                        delete_role_process = subprocess.Popen(delete_role_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        delete_role_stdout, delete_role_stderr = delete_role_process.communicate()
+                        if delete_role_process.returncode != 0:
+                            logging.error("Failed to delete role %s for cluster %s" % (role['RoleName'], cluster_name))
+                            logging.error(delete_role_stdout)
+                            logging.error(delete_role_stderr)
+                            return_code += 1
+                        else:
+                            logging.info("Deleted role %s for cluster %s" % (role['RoleName'], cluster_name))
+                else:
+                    logging.error("Failed to list attached role policies of role %s for cluster %s" % (role['RoleName'], cluster_name))
+                    logging.error(attached_role_policies_stdout)
+                    logging.error(attached_role_policies_stderr)
+                    return_code += 1
+        return return_code
+    else:
+        logging.error("Failed to list aws roles")
+        logging.error(roles_list_stdout)
+        logging.error(roles_list_stderr)
+        return 1
 
 
 def main():
@@ -606,12 +958,19 @@ def main():
         required=True,
         help='Token to be used by OCM and ROSA commands')
     parser.add_argument(
+        '--service-cluster',
+        type=str,
+        required=True,
+        help='Service Cluster name or ID')
+    parser.add_argument(
         '--mgmt-cluster',
         type=str,
+        required=True,
         help='Management Cluster name or ID')
     parser.add_argument(
         '--mgmt-org-id',
         type=str,
+        required=True,
         help='OCM Org ID where Management Cluster is located')
     parser.add_argument(
         '--workers',
@@ -674,12 +1033,34 @@ def main():
     parser.add_argument(
         '--workers-wait-time',
         type=int,
-        default=15,
-        help="Waiting time in minutes for the workers to be Ready after cluster installation. Default: 15 minutes")
+        default=60,
+        help="Waiting time in minutes for the workers to be Ready after cluster installation.. If 0, do not wait. Default: 60 minutes")
+    parser.add_argument(
+        '--terraform-cli',
+        type=str,
+        help='Full path to the terraform cli binary.')
+    parser.add_argument(
+        '--terraform-retry',
+        type=int,
+        default=5,
+        help="Number of retries when executing terraform commands")
+    parser.add_argument(
+        '--create-vpc',
+        action='store_true',
+        help='If selected, one VPC will be create for each Hosted Cluster')
     parser.add_argument(
         '--must-gather-all',
         action='store_true',
         help='If selected, collect must-gather from all cluster, if not, only collect from failed clusters')
+# Delete following parameter and code when default security group wont be used
+    parser.add_argument(
+        '--manually-cleanup-secgroups',
+        action='store_true',
+        help='If selected, delete security groups before deleting the VPC')
+    parser.add_argument(
+        '--manually-cleanup-aws-iam',
+        action='store_true',
+        help='If selected, delete AWS Roles and OpenID Providers from AWS')
 
     global args
     args = parser.parse_args()
@@ -700,6 +1081,9 @@ def main():
         logging.info('Logging to file: %s' % args.log_file)
     else:
         logging.info('Logging to console')
+
+    if args.add_cluster_load and args.workers_wait_time == 0:
+        parser.error("Workers wait time > 0 expected when --add-cluster-load is used")
 
     # global uuid to assign for the group of clusters created. each cluster will have its own cluster-id
     my_uuid = args.uuid
@@ -763,6 +1147,15 @@ def main():
         logging.error(err)
         exit(1)
 
+    terraform_cmnd = ""
+    if args.create_vpc:
+        if args.terraform_cli is None:
+            parser.error("--terraform-cli is required when using --create-vpc")
+        else:
+            os.mkdir(my_path + "/terraform")
+            shutil.copyfile(sys.path[0] + "/terraform/setup-vpcs.tf", my_path + "/terraform/setup-vpcs.tf")
+            terraform_cmnd = _verify_terraform(args.terraform_cli, my_path + "/terraform")
+
     ocm_cmnd, rosa_cmnd = _verify_cmnds(args.ocm_cli, args.rosa_cli, my_path, args.ocm_cli_version, args.rosa_cli_version)
 
     logging.info('Attempting to log in OCM using `ocm login`')
@@ -806,22 +1199,29 @@ def main():
             logging.debug(rosa_init_stdout.strip().decode("utf-8"))
 
     # Get connected to management cluster
-    if args.mgmt_cluster:
-        if args.mgmt_org_id:
-            logging.info("Getting information of %s management cluster on %s organization" % (args.mgmt_cluster, args.mgmt_org_id))
-            mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, args.mgmt_cluster, args.mgmt_org_id, args.aws_region, es, args.es_index, args.es_index_retry, my_uuid, args.cluster_count)
-            mgmt_kubeconfig_path = _download_kubeconfig(ocm_cmnd, mgmt_metadata['cluster_id'], my_path) if 'cluster_id' in mgmt_metadata else ""
-            access_to_mgmt_cluster = True if mgmt_kubeconfig_path != "" else False
-            logging.debug('Management Cluster information for %s:' % mgmt_metadata['cluster_name'])
-            logging.debug('             Custer ID:   %s' % mgmt_metadata['cluster_id'])
-            logging.debug('             Base Domain: %s' % mgmt_metadata['base_domain'])
-            logging.debug('             AWS Zone:    %s' % mgmt_metadata['aws_region'])
-            logging.debug('             Access:      %s' % str(access_to_mgmt_cluster))
-        else:
-            logging.error("Parameter --mgmt-org-id is required when --mgmt-cluster-name is provided")
+    logging.info("Getting information of %s management cluster on %s organization" % (args.mgmt_cluster, args.mgmt_org_id))
+    mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, args.mgmt_cluster, args.mgmt_org_id, args.aws_region, es, args.es_index, args.es_index_retry, my_uuid, args.cluster_count)
+    mgmt_metadata['provision_shard'] = _get_provision_shard(ocm_cmnd, args.mgmt_cluster, args.aws_region)
+    mgmt_kubeconfig_path = _download_kubeconfig(ocm_cmnd, mgmt_metadata['cluster_id'], my_path, "mgmt") if 'cluster_id' in mgmt_metadata else ""
+    access_to_mgmt_cluster = True if mgmt_kubeconfig_path != "" else False
+    logging.debug('Management Cluster information for %s:' % mgmt_metadata['cluster_name'])
+    logging.debug('             Custer ID:   %s' % mgmt_metadata['cluster_id'])
+    logging.debug('             Base Domain: %s' % mgmt_metadata['base_domain'])
+    logging.debug('             AWS Zone:    %s' % mgmt_metadata['aws_region'])
+    logging.debug('             Access:      %s' % str(access_to_mgmt_cluster))
+
+    # Get connected to service cluster
+    logging.info("Getting information of %s service cluster on %s organization" % (args.service_cluster, args.mgmt_org_id))
+    sc_metadata = _get_mgmt_cluster_info(ocm_cmnd, args.service_cluster, args.mgmt_org_id, args.aws_region, None, args.es_index, args.es_index_retry, my_uuid, args.cluster_count)
+    sc_kubeconfig_path = _download_kubeconfig(ocm_cmnd, sc_metadata['cluster_id'], my_path, "service") if 'cluster_id' in sc_metadata else ""
+    access_to_service_cluster = True if sc_kubeconfig_path != "" else False
+
+    if args.create_vpc:
+        vpcs = _create_vpcs(terraform_cmnd, args.terraform_retry, my_path, cluster_name_seed, args.cluster_count, args.aws_region)
+        if vpcs == 1:
+            logging.error("Failed to create AWS VPCs, destroying them and exiting...")
+            _destroy_vpcs(terraform_cmnd, args.terraform_retry, my_path, args.aws_region, vpcs)
             exit(1)
-    else:
-        access_to_mgmt_cluster = False
 
     # launch watcher thread to report status
     logging.info('Launching watcher thread')
@@ -878,8 +1278,12 @@ def main():
                     logging.debug("Selected jobs: %d" % jobs)
                 else:
                     jobs = 0
+                vpc_info = ""
+                if args.create_vpc:
+                    vpc_info = vpcs[(loop_counter - 1)]
+                    logging.debug("Creating cluster on VPC %s, with Public Subnet: %s and Private Subnet: %s" % (vpc_info[0], vpc_info[1], vpc_info[2]))
                 try:
-                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, all_clusters_installed))
+                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
@@ -909,6 +1313,10 @@ def main():
         logging.info('Collect must-gather from Management Cluster %s' % mgmt_metadata['cluster_name'])
         _get_mgmt_cluster_must_gather(mgmt_kubeconfig_path, my_path)
 
+    if access_to_service_cluster:
+        logging.info('Collect must-gather from Service Cluster %s' % sc_metadata['cluster_name'])
+        _get_mgmt_cluster_must_gather(sc_kubeconfig_path, my_path)
+
     if args.cleanup_clusters:
         logging.info('Attempting to delete all hosted clusters with seed %s' % (cluster_name_seed))
         delete_cluster_thread_list = []
@@ -934,7 +1342,9 @@ def main():
                 delete_cluster_thread_list.append(thread)
                 thread.start()
                 logging.debug('Number of alive threads %d' % threading.active_count())
-
+                if args.delay_between_cleanup != 0:
+                    logging.info('Waiting %d seconds for deleting the next cluster' % args.delay_between_cleanup)
+                    time.sleep(args.delay_between_cleanup)
         # Wait for active threads to finish
         logging.info('All clusters (%d) requested to be deleted. Waiting for them to finish' % len(delete_cluster_thread_list))
         for t in delete_cluster_thread_list:
@@ -946,6 +1356,11 @@ def main():
                     continue
                 else:
                     raise
+
+        if args.create_vpc:
+            destroy_result = _destroy_vpcs(terraform_cmnd, args.terraform_retry, my_path, args.aws_region, vpcs)
+            if destroy_result == 1:
+                logging.error("Failed to destroy all VPCs, please manually delete them")
 
     if args.cleanup:
         logging.info('Cleaning working directory %s' % my_path)
