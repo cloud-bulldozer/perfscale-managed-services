@@ -486,7 +486,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
         watch_process = subprocess.Popen(watch_cmd, stdout=installation_log, stderr=installation_log)
         watch_stdout, watch_stderr = watch_process.communicate()
         cluster_end_time = int(time.time())
-        _index_mgmt_cluster_stats(my_uuid, cluster_name, my_path, mgmt_cluster_name, svc_cluster_name, es_url, cluster_start_time, cluster_end_time)
+        _index_mgmt_cluster_stats(my_uuid, cluster_name, cluster_path, mgmt_cluster_name, svc_cluster_name, es, es_url, index_retry, cluster_start_time, cluster_end_time)
         return_data = _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, cluster_path)
         kubeconfig = return_data['kubeconfig'] if 'kubeconfig' in return_data else ""
         metadata['cluster-admin-create'] = return_data['cluster-admin-create'] if 'cluster-admin-create' in return_data else 0
@@ -551,8 +551,9 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
         logging.info("Saving must-gather file of hosted cluster %s" % cluster_name)
         _get_must_gather(cluster_path, cluster_name)
 
-def _index_mgmt_cluster_stats(my_uuid, cluster_name, my_path, mgmt_cluster_name, svc_cluster_name, es_url, start_time, end_time):
+def _index_mgmt_cluster_stats(my_uuid, cluster_name, my_path, mgmt_cluster_name, svc_cluster_name, es, es_url, index_retry, start_time, end_time):
     myenv = os.environ.copy()
+    metadata = {}
     prom_url = os.environ["PROM_URL"]
     logging.info('Cloning e2e-benchmarking repo https://github.com/cloud-bulldozer/e2e-benchmarking.git')
     Repo.clone_from("https://github.com/cloud-bulldozer/e2e-benchmarking.git", my_path + '/e2e-benchmarking')
@@ -570,6 +571,18 @@ def _index_mgmt_cluster_stats(my_uuid, cluster_name, my_path, mgmt_cluster_name,
         return 1
     os.chmod(my_path + '/kube-burner', 0o777)
     kb_cmd = my_path + '/kube-burner'
+
+    metadata['platform'] = "ROSA"
+    metadata['timestamp'] = start_time
+    metadata['end_date'] = end_time
+    metadata['cluster_name'] = cluster_name
+    metadata['mgmt_cluster_name'] = mgmt_cluster_name + "-.*"
+    metadata['uuid'] = my_uuid
+    metadata['svc_cluster_name'] = svc_cluster_name + "-.*"
+    metadata['sdn_type'] = "OVNKubernetes"
+    es_ignored_metadata = ""
+    common._index_result(es, "ripsaw-kube-burner", metadata, es_ignored_metadata, index_retry)
+    
     myenv["MGMT_CLUSTER_NAME"] = mgmt_cluster_name + "-.*"
     myenv["SVC_CLUSTER_NAME"] = svc_cluster_name + "-.*"
     myenv["HOSTED_CLUSTER_NS"] = ".*-" + cluster_name
