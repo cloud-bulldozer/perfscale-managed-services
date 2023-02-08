@@ -453,7 +453,7 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
     return 0
 
 
-def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed):
+def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name):
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
     os.mkdir(cluster_path)
@@ -486,6 +486,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
         watch_process = subprocess.Popen(watch_cmd, stdout=installation_log, stderr=installation_log)
         watch_stdout, watch_stderr = watch_process.communicate()
         cluster_end_time = int(time.time())
+        _index_mgmt_cluster_stats(my_uuid, cluster_name, my_path, mgmt_cluster_name, svc_cluster_name, es_url, cluster_start_time, cluster_end_time)
         return_data = _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, cluster_path)
         kubeconfig = return_data['kubeconfig'] if 'kubeconfig' in return_data else ""
         metadata['cluster-admin-create'] = return_data['cluster-admin-create'] if 'cluster-admin-create' in return_data else 0
@@ -550,6 +551,42 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
         logging.info("Saving must-gather file of hosted cluster %s" % cluster_name)
         _get_must_gather(cluster_path, cluster_name)
 
+def _index_mgmt_cluster_stats(my_uuid, cluster_name, my_path, mgmt_cluster_name, svc_cluster_name, es_url, start_time, end_time):
+    myenv = os.environ.copy()
+    prom_url = os.environ["PROM_URL"]
+    logging.info('Cloning e2e-benchmarking repo https://github.com/cloud-bulldozer/e2e-benchmarking.git')
+    Repo.clone_from("https://github.com/cloud-bulldozer/e2e-benchmarking.git", my_path + '/e2e-benchmarking')
+    url = 'https://github.com/cloud-bulldozer/kube-burner/releases/download/v1.3/kube-burner-1.3-Linux-x86_64.tar.gz'
+    dest = my_path + "kube-burner-1.3-Linux-x86_64.tar.gz"
+    response = requests.get(url, stream=True)
+    with open(dest, 'wb') as f:
+        f.write(response.raw.read())
+    untar_kb = ["tar", "xzf", my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", "C", my_path + "/kube-burner" ]
+    logging.debug(untar_kb)
+    untar_kb_process = subprocess.Popen(untar_kb, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    stdout, stderr = untar_kb_process.communicate()
+    if untar_kb_process.returncode != 0:
+        logging.error("Failed to untar Kube-burner from %s to %s" % (my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", my_path + "/kube-burner"))
+        return 1
+    os.chmod(my_path + '/kube-burner', 0o777)
+    kb_cmd = my_path + '/kube-burner'
+    myenv["MGMT_CLUSTER_NAME"] = mgmt_cluster_name + "-.*"
+    myenv["SVC_CLUSTER_NAME"] = svc_cluster_name + "-.*"
+    myenv["HOSTED_CLUSTER_NS"] = ".*-" + cluster_name
+    myenv["HOSTED_CLUSTER_NAME"] = "install-metrics-" + cluster_name
+    myenv["Q_TIME"] = int(round(datetime.datetime.utcnow().timestamp()))
+    myenv["ES_SERVER"] = es_url
+    myenv["ES_INDEXER"] = "ripsaw-kube-burner"
+    metric_config_envsubst = ["envsubst", "<" , my_path + "/e2e-benchmarking/workloads/kube-burner/metrics-profiles/hypershift-metrics.yaml", ">", my_path + "/hypershift-metrics.yaml"]
+    build_config_envsubst = ["envsubst", "<" , my_path + "/e2e-benchmarking//workloads/managed-services/baseconfig.yml", ">", my_path + "/baseconfig.yml"]
+    mc_process = subprocess.Popen(metric_config_envsubst, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    stdout, stderr = mc_process.communicate()
+    bc_process = subprocess.Popen(build_config_envsubst, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    stdout, stderr = bc_process.communicate()
+
+    kube_burner_cmd = [kb_cmd, "--uuid " + my_uuid, "--prometheus-url " + prom_url, "--start " + start_time, "--end " + end_time, "--step 2m" "--metrics-profile " + my_path + "/hypershift-metrics.yaml", "--config " + my_path + "/baseconfig.yml"]
+    kb_process = subprocess.Popen(kube_burner_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    stdout, stderr = kb_process.communicate()
 
 def _get_workers_ready(kubeconfig, cluster_name):
     myenv = os.environ.copy()
@@ -617,8 +654,6 @@ def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name):
 def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, load_duration, jobs, es_url):
     load_env = os.environ.copy()
     load_env["KUBECONFIG"] = kubeconfig
-    logging.info('Cloning e2e-benchmarking repo https://github.com/cloud-bulldozer/e2e-benchmarking.git')
-    Repo.clone_from("https://github.com/cloud-bulldozer/e2e-benchmarking.git", my_path + '/e2e-benchmarking')
     os.chdir(my_path + '/e2e-benchmarking/workloads/kube-burner')
     load_env["JOB_ITERATIONS"] = str(jobs)
     load_env["CHURN"] = "true"
@@ -1283,7 +1318,7 @@ def main():
                     vpc_info = vpcs[(loop_counter - 1)]
                     logging.debug("Creating cluster on VPC %s, with Public Subnet: %s and Private Subnet: %s" % (vpc_info[0], vpc_info[1], vpc_info[2]))
                 try:
-                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed))
+                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
