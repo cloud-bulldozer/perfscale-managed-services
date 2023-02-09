@@ -606,7 +606,7 @@ def _index_mgmt_cluster_stats(my_uuid, cluster_name, my_path, mgmt_cluster_name,
         logging.error("Failed to envsubst %s" %(stderr))
         return 1
 
-    kube_burner_cmd = [kb_cmd, "--uuid " + my_uuid, "--prometheus-url " + prom_url, "--start " + str(start_time), "--end " + str(end_time), "--step 2m" "--metrics-profile " + my_path + "/hypershift-metrics.yaml", "--config " + my_path + "/baseconfig.yml"]
+    kube_burner_cmd = [kb_cmd, "index", "--uuid " + my_uuid, "--prometheus-url " + prom_url, "--start " + str(start_time), "--end " + str(end_time), "--step 2m" "--metrics-profile " + my_path + "/hypershift-metrics.yaml", "--config " + my_path + "/baseconfig.yml"]
     kb_process = subprocess.Popen(kube_burner_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
     stdout, stderr = kb_process.communicate()
     if kb_process.returncode != 0:
