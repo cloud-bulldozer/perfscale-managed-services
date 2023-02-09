@@ -558,11 +558,11 @@ def _index_mgmt_cluster_stats(my_uuid, cluster_name, my_path, mgmt_cluster_name,
     logging.info('Cloning e2e-benchmarking repo https://github.com/cloud-bulldozer/e2e-benchmarking.git')
     Repo.clone_from("https://github.com/cloud-bulldozer/e2e-benchmarking.git", my_path + '/e2e-benchmarking')
     url = 'https://github.com/cloud-bulldozer/kube-burner/releases/download/v1.3/kube-burner-1.3-Linux-x86_64.tar.gz'
-    dest = my_path + "kube-burner-1.3-Linux-x86_64.tar.gz"
+    dest = my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz"
     response = requests.get(url, stream=True)
     with open(dest, 'wb') as f:
         f.write(response.raw.read())
-    untar_kb = ["tar", "xzf", my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", "C", my_path + "/kube-burner" ]
+    untar_kb = ["tar", "xzf", my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", "-C", my_path + "/" ]
     logging.debug(untar_kb)
     untar_kb_process = subprocess.Popen(untar_kb, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
     stdout, stderr = untar_kb_process.communicate()
@@ -582,24 +582,36 @@ def _index_mgmt_cluster_stats(my_uuid, cluster_name, my_path, mgmt_cluster_name,
     metadata['sdn_type'] = "OVNKubernetes"
     es_ignored_metadata = ""
     common._index_result(es, "ripsaw-kube-burner", metadata, es_ignored_metadata, index_retry)
-    
+
+    q_time = int(round(datetime.datetime.utcnow().timestamp()))
     myenv["MGMT_CLUSTER_NAME"] = mgmt_cluster_name + "-.*"
     myenv["SVC_CLUSTER_NAME"] = svc_cluster_name + "-.*"
     myenv["HOSTED_CLUSTER_NS"] = ".*-" + cluster_name
     myenv["HOSTED_CLUSTER_NAME"] = "install-metrics-" + cluster_name
-    myenv["Q_TIME"] = int(round(datetime.datetime.utcnow().timestamp()))
+    myenv["Q_TIME"] = str(q_time)
     myenv["ES_SERVER"] = es_url
-    myenv["ES_INDEXER"] = "ripsaw-kube-burner"
-    metric_config_envsubst = ["envsubst", "<" , my_path + "/e2e-benchmarking/workloads/kube-burner/metrics-profiles/hypershift-metrics.yaml", ">", my_path + "/hypershift-metrics.yaml"]
-    build_config_envsubst = ["envsubst", "<" , my_path + "/e2e-benchmarking//workloads/managed-services/baseconfig.yml", ">", my_path + "/baseconfig.yml"]
-    mc_process = subprocess.Popen(metric_config_envsubst, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    stdout, stderr = mc_process.communicate()
-    bc_process = subprocess.Popen(build_config_envsubst, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    stdout, stderr = bc_process.communicate()
+    myenv["ES_INDEX"] = "ripsaw-kube-burner"
 
-    kube_burner_cmd = [kb_cmd, "--uuid " + my_uuid, "--prometheus-url " + prom_url, "--start " + start_time, "--end " + end_time, "--step 2m" "--metrics-profile " + my_path + "/hypershift-metrics.yaml", "--config " + my_path + "/baseconfig.yml"]
+    metric_config_envsubst = ["envsubst <" + my_path + "/e2e-benchmarking/workloads/kube-burner/metrics-profiles/hypershift-metrics.yaml >" + my_path + "/hypershift-metrics.yaml"]
+    build_config_envsubst = ["envsubst <" + my_path + "/e2e-benchmarking/workloads/kube-burner/workloads/managed-services/baseconfig.yml >" + my_path + "/baseconfig.yml"]
+    mc_process = subprocess.Popen(metric_config_envsubst, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    stdout, stderr = mc_process.communicate()
+    if mc_process.returncode != 0:
+        logging.error("Failed to envsubst %s" %(stderr))
+        return 1
+
+    bc_process = subprocess.Popen(build_config_envsubst, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    stdout, stderr = bc_process.communicate()
+    if bc_process.returncode != 0:
+        logging.error("Failed to envsubst %s" %(stderr))
+        return 1
+
+    kube_burner_cmd = [kb_cmd, "--uuid " + my_uuid, "--prometheus-url " + prom_url, "--start " + str(start_time), "--end " + str(end_time), "--step 2m" "--metrics-profile " + my_path + "/hypershift-metrics.yaml", "--config " + my_path + "/baseconfig.yml"]
     kb_process = subprocess.Popen(kube_burner_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
     stdout, stderr = kb_process.communicate()
+    if kb_process.returncode != 0:
+        logging.error("Failed to run kube-burner index %s" %(stderr))
+        return 1
 
 def _get_workers_ready(kubeconfig, cluster_name):
     myenv = os.environ.copy()
