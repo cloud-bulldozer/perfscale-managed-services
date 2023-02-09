@@ -149,6 +149,7 @@ def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, 
         return 1
     logging.info('Applying terraform plan command with: terraform apply for %s cluster, using %s as name seed on %s' % (cluster_count, cluster_name_seed, aws_region))
     for trying in range(1, retries + 1):
+        logging.info('Try: %d. Starting terraform apply' % trying)
         myenv = os.environ.copy()
         myenv["TF_VAR_cluster_name_seed"] = cluster_name_seed
         myenv["TF_VAR_cluster_count"] = str(cluster_count)
