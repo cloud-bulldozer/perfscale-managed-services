@@ -573,8 +573,7 @@ def _index_mgmt_cluster_stats(my_uuid, cluster_name, my_path, mgmt_cluster_name,
     kb_cmd = my_path + '/kube-burner'
 
     metadata['platform'] = "ROSA"
-    metadata['timestamp'] = start_time
-    metadata['end_date'] = end_time
+    metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
     metadata['cluster_name'] = cluster_name
     metadata['mgmt_cluster_name'] = mgmt_cluster_name + "-.*"
     metadata['uuid'] = my_uuid
