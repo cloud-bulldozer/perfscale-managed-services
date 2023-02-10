@@ -542,7 +542,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
             logging.info('Waiting for all clusters to be installed to start e2e-benchmarking execution on %s' % cluster_name)
             all_clusters_installed.wait()
         logging.info('Executing e2e-benchmarking to add load on the cluster %s with %s nodes during %s with %d iterations' % (cluster_name, str(worker_nodes), load_duration, job_iterations))
-        _cluster_load(kubeconfig, cluster_path, cluster_name, mgmt_cluster_name, load_duration, job_iterations, es_url)
+        _cluster_load(kubeconfig, cluster_path, cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, job_iterations, es_url)
         logging.info('Finished execution of e2e-benchmarking workload on %s' % cluster_name)
     if must_gather_all or process.returncode != 0:
         random_sleep = random.randint(60, 300)
@@ -675,7 +675,7 @@ def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name):
     return ready_nodes
 
 
-def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, load_duration, jobs, es_url):
+def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, jobs, es_url):
     load_env = os.environ.copy()
     load_env["KUBECONFIG"] = kubeconfig
     os.chdir(my_path + '/e2e-benchmarking/workloads/kube-burner')
@@ -689,6 +689,7 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, l
     load_env["INDEXING"] = "true"
     load_env["HYPERSHIFT"] = "true"
     load_env["MGMT_CLUSTER_NAME"] = mgmt_cluster_name + "-.*"
+    load_env["SVC_CLUSTER_NAME"] = svc_cluster_name + "-.*"
     load_env["HOSTED_CLUSTER_NS"] = ".*-" + hosted_cluster_name
     if es_url is not None:
         load_env["ES_SERVER"] = es_url
