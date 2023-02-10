@@ -6,7 +6,7 @@ trap '_delete_clusters ${EXECUTION_SEED}' SIGINT SIGTERM
 LOG_FILE="${LOG_FILE:-/tmp/install_loop.log}"
 NUMBER_OF_CLUSTERS="${NUMBER_OF_CLUSTERS:-3}"
 CLUSTER_NAME_SEED="${CLUSTER_NAME_SEED:-chaos}"
-AWS_SUBNETS="${AWS_SUBNETS:-subnet-xxxxxxx,subnet-xxxxxx}"
+AWS_SUBNETS="${AWS_SUBNETS:-subnet-xxxxxxx,subnet-xxxxxx,subnet-xxxxxx,subnet-xxxxxx,subnet-xxxxxx,subnet-xxxxxx}"
 PROVISION_SHARD="${PROVISION_SHARD:-provision_shard_id:xxxxxx}"
 export AWS_REGION="${AWS_REGION:-us-east-2}"
 ###
@@ -32,7 +32,7 @@ _delete_clusters() {
 _create_cluster() {
   log "INFO: Creating cluster $1" | tee /dev/fd/3
   # Timeout of 15 minutes for creating the cluster (3 times of normal execution)
-  timeout --foreground -k 900 900 rosa create cluster -c $1 --replicas 2 --hosted-cp --sts --mode auto -y --watch --subnet-ids $2 --properties $3 --compute-machine-type m5.xlarge --version 4.12.1 || (log "ERROR: Failed to create cluster $1 after 15 minutes" && return 1)
+  timeout --foreground -k 900 900 rosa create cluster -c $1 --replicas 2 --hosted-cp --sts --mode auto -y --watch --multi-az --subnet-ids $2 --properties $3 --compute-machine-type m5.xlarge --version 4.12.1 || (log "ERROR: Failed to create cluster $1 after 15 minutes" && return 1)
   log "INFO: Cluster $1 created" 3>&1 1>>${LOG_FILE} | tee /dev/fd/3
 }
 

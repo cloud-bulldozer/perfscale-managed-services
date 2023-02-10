@@ -164,13 +164,13 @@ def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, 
                     json_output = json.load(terraform_file)
             except Exception as err:
                 logging.error(err)
-                logging.error('Try: %d. Failed to read terraform output file %s' % (my_path + "/terraform/terraform.tfstate"))
+                logging.error('Try: %d. Failed to read terraform output file %s' % (trying, my_path + "/terraform/terraform.tfstate"))
                 return 1
             vpcs = []
             # Check if we have IDs for everything
             number_of_vpcs = len(json_output['outputs']['vpc-id']['value'])
-            number_of_public = len(json_output['outputs']['cluster-public-subnet']['value'])
-            number_of_private = len(json_output['outputs']['cluster-private-subnet']['value'])
+            number_of_public = len(json_output['outputs']['cluster-public-subnets']['value'])
+            number_of_private = len(json_output['outputs']['cluster-private-subnets']['value'])
             if number_of_vpcs != cluster_count or number_of_public != cluster_count or number_of_private != cluster_count:
                 logging.info("Required Clusters: %d" % cluster_count)
                 logging.info('Number of VPCs: %d' % number_of_vpcs)
@@ -181,10 +181,18 @@ def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, 
             else:
                 for cluster in range(cluster_count):
                     vpc_id = json_output['outputs']['vpc-id']['value'][cluster]
-                    public_subnet = json_output['outputs']['cluster-public-subnet']['value'][cluster]
-                    private_subnet = json_output['outputs']['cluster-private-subnet']['value'][cluster]
-                    logging.debug("VPC ID: %s, Public Subnet: %s, Private Subnet: %s" % (vpc_id, public_subnet, private_subnet))
-                    vpcs.append((vpc_id, public_subnet, private_subnet))
+                    public_subnets = json_output['outputs']['cluster-public-subnets']['value'][cluster]
+                    private_subnets = json_output['outputs']['cluster-private-subnets']['value'][cluster]
+                    if len(public_subnets) != 3 or len(private_subnets) != 3:
+                        logging.warning("Try: %d. Number of public subnets of VPC %s: %d (required: 3)" % (trying, vpc_id, len(public_subnets)))
+                        logging.warning("Try: %d. Number of private subnets of VPC %s: %d (required: 3)" % (trying, vpc_id, len(private_subnets)))
+                        logging.warning("Try: %d: Not all subnets created, retring in 15 seconds" % trying)
+                        time.sleep(15)
+                    else:
+                        logging.debug("VPC ID: %s, Public Subnet: %s, Private Subnet: %s" % (vpc_id, public_subnets, private_subnets))
+                        subnets = ",".join(public_subnets)
+                        subnets = subnets + "," + ",".join(private_subnets)
+                        vpcs.append((vpc_id, subnets))
                 return vpcs
         else:
             logging.warning('Try: %d. %s unable to execute apply, retrying in 15 seconds' % (trying, terraform))
@@ -461,10 +469,10 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
     logging.debug('Attempting cluster installation')
     logging.debug('Output directory set to %s' % cluster_path)
     cluster_name = cluster_name_seed + "-" + str(my_inc).zfill(4)
-    cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, "--replicas", str(worker_nodes), "--hosted-cp", "--sts", "--mode", "auto", "-y", "--output", "json"]
+    cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, "--replicas", str(worker_nodes), "--hosted-cp", "--multi-az", "--sts", "--mode", "auto", "-y", "--output", "json"]
     if create_vpc:
         cluster_cmd.append("--subnet-ids")
-        cluster_cmd.append(vpc_info[1] + "," + vpc_info[2])
+        cluster_cmd.append(vpc_info[1])
     if provision_shard:
         cluster_cmd.append("--properties")
         cluster_cmd.append("provision_shard_id:" + provision_shard)
@@ -478,6 +486,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
     logging.info('Started cluster %d with %d workers' % (my_inc, worker_nodes))
     stdout, stderr = process.communicate()
     metadata = {}
+    metadata['cluster_name'] = cluster_name
     if process.returncode == 0:
         metadata = get_metadata(cluster_name, rosa_cmnd)
         sc_namespace_timing = _namespace_wait(sc_kubeconfig, metadata['cluster_id'], cluster_name, "Service") if sc_kubeconfig != "" else 0
@@ -684,7 +693,7 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, s
     load_env["CHURN"] = "true"
     load_env["CHURN_DURATION"] = load_duration
     load_env["CHURN_PERCENT"] = "10"
-    load_env["CHURN_WAIT"] = "30s"
+    load_env["CHURN_DELAY"] = "30s"
     load_env["JOB_TIMEOUT"] = "6h"
     load_env["CLEANUP_WHEN_FINISH"] = "true"
     load_env["INDEXING"] = "true"
@@ -1037,8 +1046,8 @@ def main():
         '--workers',
         type=str,
         required=True,
-        default='2',
-        help='Number of workers for the hosted cluster (min: 2). If list (comma separated), iteration over the list until reach number of clusters')
+        default='3',
+        help='Number of workers for the hosted cluster (min: 3). If list (comma separated), iteration over the list until reach number of clusters')
     parser.add_argument(
         '--ocm-url',
         type=str,
@@ -1169,6 +1178,18 @@ def main():
         exit(1)
 
     es = common._connect_to_es(args.es_url, args.es_insecure) if args.es_url is not None else None
+
+    logging.debug('Validating --workers %s parameter' % args.workers)
+    pattern = re.compile(r"^(\d+)(,\s*\d+)*$")
+    if args.workers.isdigit() and int(args.workers) % 3 != 0:
+        logging.error("Invalid value for parameter  \"--workers %s\". If digit, it must be divisible by 3" % args.workers)
+        exit(1)
+    elif bool(pattern.match(args.workers)):
+        for num in args.workers.split(","):
+            if int(num) < 3 or int(num) % 3 != 0:
+                logging.error("Invalid value for parameter \"--workers %s\". Value %s must be divisible by 3" % (args.workers, num))
+                exit(1)
+    logging.info("Workers parameter \"--workers %s\" validated" % args.workers)
 
     if os.path.exists(args.aws_account_file):
         logging.info('AWS account file found. Loading account information')
@@ -1320,18 +1341,18 @@ def main():
             if create_cluster:
                 logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
                 pattern = re.compile(r"^(\d+)(,\s*\d+)*$")
-                if args.workers.isdigit() and int(args.workers) >= 2:
+                if args.workers.isdigit() and int(args.workers) >= 3:
                     workers = int(args.workers)
                 elif bool(pattern.match(args.workers)):
                     num = int(args.workers.split(",")[(loop_counter - 1) % len(args.workers.split(","))])
-                    if num >= 2:
+                    if num >= 3 and num % 3 == 0:
                         workers = num
                     else:
-                        logging.error("Invalid value on workers list %s. Setting workers to 2" % num)
-                        workers = 2
+                        logging.error("Invalid value on workers list %s. Setting workers to 3" % num)
+                        workers = 3
                 else:
-                    logging.error("Invalid value for parameter --workers %s. Setting workers to 2" % args.workers)
-                    workers = 2
+                    logging.error("Invalid value for parameter --workers %s. Setting workers to 3" % args.workers)
+                    workers = 3
                 if args.add_cluster_load:
                     low_jobs = max(0, int((args.cluster_load_jobs_per_worker * workers) - (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100)))
                     high_jobs = int((args.cluster_load_jobs_per_worker * workers) + (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100))
@@ -1342,7 +1363,7 @@ def main():
                 vpc_info = ""
                 if args.create_vpc:
                     vpc_info = vpcs[(loop_counter - 1)]
-                    logging.debug("Creating cluster on VPC %s, with Public Subnet: %s and Private Subnet: %s" % (vpc_info[0], vpc_info[1], vpc_info[2]))
+                    logging.debug("Creating cluster on VPC %s, with subnets: %s" % (vpc_info[0], vpc_info[1]))
                 try:
                     thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster))
                 except Exception as err:
