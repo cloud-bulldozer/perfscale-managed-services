@@ -15,6 +15,7 @@ import argparse
 import time
 import datetime
 import subprocess
+import signal
 import sys
 import shutil
 import os
@@ -32,6 +33,16 @@ from git import Repo
 from libs import common
 from libs import parentParsers
 from random import randrange
+
+
+def set_force_terminate(signum, frame):
+    logging.warning("Captured Ctrl-C, sending exit event to watcher, any cluster install/delete will continue it execution")
+    global force_terminate
+    force_terminate = True
+
+
+def disable_signals():
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
 def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
@@ -94,7 +105,7 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
             tags_list.append(tag['ref'].split('/')[-1].split('v')[-1])
         logging.debug('List of tags: %s' % tags_list)
         if ocm_version == 'latest':
-            version = sorted(tags_list, key=ver.StrictVersion)[-1]
+            version = sorted(tags_list, key=ver.StrictVersaion)[-1]
         else:
             version = None
             for tag in tags_list:
@@ -359,6 +370,9 @@ def _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, my_path):
     logging.debug(kubeconfig_cmd)
     cluster_admin_create_time = int(time.time())
     for trying in range(1, 101):
+        if force_terminate:
+            logging.error("Exiting cluster access process for %s cluster after capturing Ctrl-C" % cluster_name)
+            return return_data
         process = subprocess.Popen(kubeconfig_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
         stdout, stderr = process.communicate()
         if process.returncode != 0:
@@ -372,6 +386,9 @@ def _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, my_path):
             logging.info('Trying to login on cluster %s (100 retries allowed, 5s timeout on oc command)' % cluster_name)
             oc_login_time = int(time.time())
             for trying2 in range(1, 101):
+                if force_terminate:
+                    logging.error("Exiting cluster access process for %s cluster after capturing Ctrl-C" % cluster_name)
+                    return return_data
                 oc_login_cmnd = ["oc", "login", json.loads(stdout)['api_url'], "--username", json.loads(stdout)['username'], "--password", json.loads(stdout)['password'], "--kubeconfig", my_path + "/kubeconfig", "--insecure-skip-tls-verify=true", "--request-timeout=30s"]
                 logging.debug(oc_login_cmnd)
                 process_oc_login = subprocess.Popen(oc_login_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
@@ -392,6 +409,9 @@ def _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, my_path):
                     oc_adm_cmnd = ["oc", "adm", "top", "images"]
                     logging.debug(oc_adm_cmnd)
                     for trying3 in range(1, 101):
+                        if force_terminate:
+                            logging.error("Exiting cluster access process for %s cluster after capturing Ctrl-C" % cluster_name)
+                            return return_data
                         process_oc_adm = subprocess.Popen(oc_adm_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path,  universal_newlines=True, env=myenv)
                         stdout_oc_adm, stderr_oc_adm = process_oc_adm.communicate()
                         if process_oc_adm.returncode != 0:
@@ -419,6 +439,9 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
     myenv["KUBECONFIG"] = kubeconfig
     projects_cmnd = ["oc", "get", "projects", "--output", "json"]
     for trying in range(1, 101):
+        if force_terminate:
+            logging.error("Exiting namespace creation waiting for %s on the %s cluster after capturing Ctrl-C" % (cluster_name, type))
+            return 0
         projects_process = subprocess.Popen(projects_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=myenv)
         logging.debug(projects_cmnd)
         projects_process_stdout, projects_process_stderr = projects_process.communicate()
@@ -473,19 +496,21 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
     logging.debug(cluster_cmd)
     installation_log = open(cluster_path + "/" + 'installation.log', 'w')
     cluster_start_time = int(time.time())
-    process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log)
+    process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
     logging.info('Started cluster %d with %d workers' % (my_inc, worker_nodes))
     stdout, stderr = process.communicate()
     metadata = {}
+    metadata['cluster_name'] = cluster_name
     if process.returncode == 0:
         metadata = get_metadata(cluster_name, rosa_cmnd)
         sc_namespace_timing = _namespace_wait(sc_kubeconfig, metadata['cluster_id'], cluster_name, "Service") if sc_kubeconfig != "" else 0
         mgmt_namespace_timing = _namespace_wait(mgmt_kubeconfig, metadata['cluster_id'], cluster_name, "Management") if mgmt_kubeconfig != "" else 0
         watch_cmd = [rosa_cmnd, "logs", "install", "-c", cluster_name, "--watch"]
         logging.debug(watch_cmd)
-        watch_process = subprocess.Popen(watch_cmd, stdout=installation_log, stderr=installation_log)
+        watch_process = subprocess.Popen(watch_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
         watch_stdout, watch_stderr = watch_process.communicate()
         cluster_end_time = int(time.time())
+        metadata = get_metadata(cluster_name, rosa_cmnd)
         _index_mgmt_cluster_stats(my_uuid, cluster_name, cluster_path, mgmt_cluster_name, svc_cluster_name, es, es_url, index_retry, cluster_start_time, cluster_end_time)
         return_data = _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, cluster_path)
         kubeconfig = return_data['kubeconfig'] if 'kubeconfig' in return_data else ""
@@ -551,6 +576,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
         logging.info("Saving must-gather file of hosted cluster %s" % cluster_name)
         _get_must_gather(cluster_path, cluster_name)
 
+
 def _index_mgmt_cluster_stats(my_uuid, cluster_name, my_path, mgmt_cluster_name, svc_cluster_name, es, es_url, index_retry, start_time, end_time):
     myenv = os.environ.copy()
     metadata = {}
@@ -562,7 +588,7 @@ def _index_mgmt_cluster_stats(my_uuid, cluster_name, my_path, mgmt_cluster_name,
     response = requests.get(url, stream=True)
     with open(dest, 'wb') as f:
         f.write(response.raw.read())
-    untar_kb = ["tar", "xzf", my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", "-C", my_path + "/" ]
+    untar_kb = ["tar", "xzf", my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", "-C", my_path + "/"]
     logging.debug(untar_kb)
     untar_kb_process = subprocess.Popen(untar_kb, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
     stdout, stderr = untar_kb_process.communicate()
@@ -596,21 +622,22 @@ def _index_mgmt_cluster_stats(my_uuid, cluster_name, my_path, mgmt_cluster_name,
     mc_process = subprocess.Popen(metric_config_envsubst, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
     stdout, stderr = mc_process.communicate()
     if mc_process.returncode != 0:
-        logging.error("Failed to envsubst %s" %(stderr))
+        logging.error("Failed to envsubst %s" % (stderr))
         return 1
 
     bc_process = subprocess.Popen(build_config_envsubst, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
     stdout, stderr = bc_process.communicate()
     if bc_process.returncode != 0:
-        logging.error("Failed to envsubst %s" %(stderr))
+        logging.error("Failed to envsubst %s" % (stderr))
         return 1
 
     kube_burner_cmd = [kb_cmd, "index", "--uuid", my_uuid, "--prometheus-url", prom_url, "--start", str(start_time), "--end", str(end_time), "--step", "2m", "--metrics-profile", my_path + "/hypershift-metrics.yaml", "--config", my_path + "/baseconfig.yml"]
     kb_process = subprocess.Popen(kube_burner_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
     stdout, stderr = kb_process.communicate()
     if kb_process.returncode != 0:
-        logging.error("Failed to run kube-burner index %s" %(stderr))
+        logging.error("Failed to run kube-burner index %s" % (stderr))
         return 1
+
 
 def _get_workers_ready(kubeconfig, cluster_name):
     myenv = os.environ.copy()
@@ -644,6 +671,9 @@ def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name):
     starting_time = datetime.datetime.utcnow().timestamp()
     logging.debug("Waiting %d minutes for nodes to be Ready on cluster %s" % (wait_time, cluster_name))
     while datetime.datetime.utcnow().timestamp() < starting_time + wait_time * 60:
+        if force_terminate:
+            logging.error("Exiting workers waiting on the cluster %s after capturing Ctrl-C" % cluster_name)
+            return 0
         logging.info('Getting node information for cluster %s' % cluster_name)
         nodes_command = ["oc", "get", "nodes", "-o", "json"]
         logging.debug(nodes_command)
@@ -700,8 +730,11 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, s
     load_command = ["./run.sh"]
     logging.debug(load_command)
     load_log = open(my_path + '/cluster_load.log', 'w')
-    load_process = subprocess.Popen(load_command, stdout=load_log, stderr=load_log, env=load_env)
-    load_process_stdout, load_process_stderr = load_process.communicate()
+    if not force_terminate:
+        load_process = subprocess.Popen(load_command, stdout=load_log, stderr=load_log, env=load_env)
+        load_process_stdout, load_process_stderr = load_process.communicate()
+    else:
+        logging.warning("Not starting e2e on cluster %s after capturing Ctrl-C" % hosted_cluster_name)
 
 
 def _get_must_gather(cluster_path, cluster_name):
@@ -790,7 +823,7 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
     logging.info('Watcher thread started')
     logging.info('Getting status every %d seconds' % int(delay))
     cmd = [rosa_cmnd, "list", "clusters", "-o", "json"]
-    while True:
+    while not force_terminate:
         logging.debug(cmd)
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         stdout, stderr = process.communicate()
@@ -846,7 +879,9 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
         else:
             logging.info("Waiting %d seconds for next watcher run" % delay)
             time.sleep(delay)
-    logging.info('Watcher exiting')
+    with all_clusters_installed:
+        all_clusters_installed.notify_all()
+    logging.info('Watcher terminated')
 
 
 def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uuid, es, index, index_retry):
@@ -857,18 +892,18 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
     logging.debug(del_cmd)
     cleanup_log = open(cluster_path + '/cleanup.log', 'w')
     cluster_start_time = int(time.time())
-    process = subprocess.Popen(del_cmd, stdout=cleanup_log, stderr=cleanup_log)
+    process = subprocess.Popen(del_cmd, stdout=cleanup_log, stderr=cleanup_log, preexec_fn=disable_signals)
     stdout, stderr = process.communicate()
     cluster_delete_end_time = int(time.time())
 
     logging.debug('Destroying STS associated resources of cluster name: %s' % cluster_name)
     delete_operator_roles = [rosa_cmnd, "delete", "operator-roles", "-c", cluster_name, "-m", "auto", "-y"]
-    process_operator = subprocess.Popen(delete_operator_roles, stdout=cleanup_log, stderr=cleanup_log)
+    process_operator = subprocess.Popen(delete_operator_roles, stdout=cleanup_log, stderr=cleanup_log, preexec_fn=disable_signals)
     stdout, stderr = process_operator.communicate()
     if process_operator.returncode != 0:
         logging.error("Failed to delete operator roles on cluster %s" % cluster_name)
     delete_oidc_providers = [rosa_cmnd, "delete", "oidc-provider", "-c", cluster_name, "-m", "auto", "-y"]
-    process_oidc = subprocess.Popen(delete_oidc_providers, stdout=cleanup_log, stderr=cleanup_log)
+    process_oidc = subprocess.Popen(delete_oidc_providers, stdout=cleanup_log, stderr=cleanup_log, preexec_fn=disable_signals)
     stdout, stderr = process_oidc.communicate()
     if process_oidc.returncode != 0:
         logging.error("Failed to delete identity providers on cluster %s" % cluster_name)
@@ -1286,11 +1321,13 @@ def main():
     # launch watcher thread to report status
     logging.info('Launching watcher thread')
     clusters_resume = {}
+    global force_terminate
+    force_terminate = False
     all_clusters_installed = threading.Condition()
     watcher = threading.Thread(target=_watcher, args=(rosa_cmnd, my_path, cluster_name_seed, args.cluster_count, args.watcher_delay, my_uuid, clusters_resume, all_clusters_installed, args.add_cluster_load))
+    signal.signal(signal.SIGINT, set_force_terminate)
     watcher.daemon = True
     watcher.start()
-
     logging.info('Attempting to start %d clusters with %d batch size' % (args.cluster_count, args.batch_size))
     cluster_thread_list = []
     batch_count = 0
@@ -1382,7 +1419,7 @@ def main():
         delete_cluster_thread_list = []
         cmd = [rosa_cmnd, "list", "clusters", "-o", "json"]
         logging.debug(cmd)
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, preexec_fn=disable_signals)
         stdout, stderr = process.communicate()
         try:
             clusters = json.loads(stdout)
