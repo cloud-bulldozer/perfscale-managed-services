@@ -58,7 +58,6 @@ without uploading any information**
 | --uuid | UUID to use for the test. If one is not provided it will be generated for you. | -- |
 | --path | Full path to a temporary location to use for the test. | /tmp/[uuid] |
 | --cleanup | Delete the temporary directory (including all the data from the clusters) upon completion. | False |
-
 | --rosa-cli | Full path to the rosa cli command. If not provided we will download latest from github | -- |
 | --rosa-init | Run `rosa init` to initialize AWS account configuration. | False |
 | --rosa-env | Rosa environment where to install clusters. | -- |
