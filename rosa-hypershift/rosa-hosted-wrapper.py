@@ -485,13 +485,14 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
     return 0
 
 
-def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name):
+def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, create_operator_roles, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name):
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
     os.mkdir(cluster_path)
     logging.debug('Attempting cluster installation')
     logging.debug('Output directory set to %s' % cluster_path)
     cluster_name = cluster_name_seed + "-" + str(my_inc).zfill(4)
+    create_operator_roles = [rosa_cmnd, "create", "operator-roles", "--cluster", cluster_name, "--mode", "auto", "--yes", "--force-policy-creation" ]
     cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, "--replicas", str(worker_nodes), "--hosted-cp", "--multi-az", "--sts", "--mode", "auto", "-y", "--output", "json"]
     if create_vpc:
         cluster_cmd.append("--subnet-ids")
@@ -502,12 +503,20 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
     if args.wildcard_options:
         for param in args.wildcard_options.split():
             cluster_cmd.append(param)
+
     logging.debug(cluster_cmd)
     installation_log = open(cluster_path + "/" + 'installation.log', 'w')
     cluster_start_time = int(time.time())
     process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
     logging.info('Started cluster %d with %d workers' % (my_inc, worker_nodes))
     stdout, stderr = process.communicate()
+
+    logging.debug(create_operator_roles)
+    roles_log = open(cluster_path + "/" + 'create_roles.log', 'w')
+    create_roles_process = subprocess.Popen(create_operator_roles, stdout=create_roles.log, stderr=create_roles.log, preexec_fn=disable_signals)
+    loggin.info('Creating Cluster Operator Roles')
+    stdout, stderr = create_roles_process.communicate()
+
     metadata = {}
     metadata['cluster_name'] = cluster_name
     if process.returncode == 0:
