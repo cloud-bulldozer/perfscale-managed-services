@@ -211,7 +211,7 @@ def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, 
             logging.warning('Try: %d. %s unable to execute apply, retrying in 15 seconds' % (trying, terraform))
             time.sleep(15)
     logging.error('Failed to appy terraform plan after %d retries' % retries)
-    return 1
+    return []
 
 
 def _destroy_vpcs(terraform, retries, my_path, aws_region, vpcs):
@@ -1380,7 +1380,7 @@ def main():
 
     if args.create_vpc:
         vpcs = _create_vpcs(terraform_cmnd, args.terraform_retry, my_path, cluster_name_seed, args.cluster_count, args.aws_region)
-        if vpcs == 1:
+        if not vpcs:
             logging.error("Failed to create AWS VPCs, destroying them and exiting...")
             _destroy_vpcs(terraform_cmnd, args.terraform_retry, my_path, args.aws_region, vpcs)
             exit(1)
