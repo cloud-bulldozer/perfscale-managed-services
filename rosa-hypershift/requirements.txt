@@ -1,2 +1,4 @@
 git-python
 ConfigParser
+PyYAML
+requests

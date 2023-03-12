@@ -21,6 +21,7 @@ import shutil
 import os
 import uuid
 import json
+import yaml
 import random
 import re
 import requests
@@ -29,6 +30,7 @@ import logging
 import configparser
 from distutils import version as ver
 import threading
+import concurrent.futures
 from git import Repo
 from libs import common
 from libs import parentParsers
@@ -209,7 +211,7 @@ def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, 
             logging.warning('Try: %d. %s unable to execute apply, retrying in 15 seconds' % (trying, terraform))
             time.sleep(15)
     logging.error('Failed to appy terraform plan after %d retries' % retries)
-    return 1
+    return []
 
 
 def _destroy_vpcs(terraform, retries, my_path, aws_region, vpcs):
@@ -365,9 +367,11 @@ def _download_kubeconfig(ocm_cmnd, cluster_id, my_path, type):
         logging.error(stderr)
         return ""
     else:
+        kubeconfig_as_dict = yaml.load(json.loads(stdout)['kubeconfig'], Loader=yaml.Loader)
+        del kubeconfig_as_dict['clusters'][0]['cluster']['certificate-authority-data']
         kubeconfig_path = my_path + "/kubeconfig_" + type
         with open(kubeconfig_path, "w") as kubeconfig_file:
-            kubeconfig_file.write(json.loads(stdout)['kubeconfig'])
+            yaml.dump(kubeconfig_as_dict, kubeconfig_file)
         logging.debug('Downloaded kubeconfig file for Cluster ID %s and stored at %s' % (cluster_id, kubeconfig_path))
         return kubeconfig_path
 
@@ -438,6 +442,42 @@ def _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, my_path):
             logging.error("Failed to login on cluster %s after 100 retries. Exiting" % cluster_name)
             return return_data
     logging.error("Failed to create cluster-admin user on cluster %s after 100 retries. Exiting" % cluster_name)
+    return return_data
+
+
+def _preflight_wait(rosa_cmnd, cluster_id, cluster_name):
+    logging.info('Collecting preflight times for cluster %s' % cluster_name)
+    return_data = {}
+    start_time = int(time.time())
+    previous_status = ""
+    for trying in range(1, 151):
+        if force_terminate:
+            logging.error("Exiting preflight times capturing on %s cluster after capturing Ctrl-C" % cluster_name)
+            return 0
+        logging.info('Try: %d. Getting status for cluster %s' % (trying, cluster_name))
+        status_cmnd = [rosa_cmnd, "describe", "cluster", "-c", cluster_id, "-o", "json"]
+        logging.debug(status_cmnd)
+        status_process = subprocess.Popen(status_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        status_stdout, status_stderr = status_process.communicate()
+        current_time = int(time.time())
+        try:
+            current_status = json.loads(status_stdout)['state']
+        except Exception as err:
+            logging.error("Try: %d. Cannot load metadata for cluster %s" % (trying, cluster_name))
+            logging.error(err)
+            continue
+        if current_status != previous_status and previous_status != "":
+            return_data[previous_status] = current_time - start_time
+            start_time = current_time
+            logging.info("Try: %d. Cluster %s moved from %s status to %s status after %d seconds" % (trying, cluster_name, previous_status, current_status, return_data[previous_status]))
+            if current_status == "installing":
+                logging.info("Try: %d. Cluster %s is on installing status. Exiting preflights waiting..." % (trying, cluster_name))
+                return return_data
+        else:
+            logging.info("Try: %d. Cluster %s on %s status. Waiting 2 seconds for next check" % (trying, cluster_name, current_status))
+            time.sleep(2)
+        previous_status = current_status
+    logging.error("Try: %d. Cluster %s on %s status (not installing) after 150 retries. Exiting preflight waiting..." % (trying, cluster_name, current_status))
     return return_data
 
 
@@ -521,8 +561,13 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, create_operator_roles
     metadata['cluster_name'] = cluster_name
     if process.returncode == 0:
         metadata = get_metadata(cluster_name, rosa_cmnd)
-        sc_namespace_timing = _namespace_wait(sc_kubeconfig, metadata['cluster_id'], cluster_name, "Service") if sc_kubeconfig != "" else 0
-        mgmt_namespace_timing = _namespace_wait(mgmt_kubeconfig, metadata['cluster_id'], cluster_name, "Management") if mgmt_kubeconfig != "" else 0
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            sc_namespace = executor.submit(_namespace_wait, sc_kubeconfig, metadata['cluster_id'], cluster_name, "Service") if sc_kubeconfig != "" else 0
+            mc_namespace = executor.submit(_namespace_wait, mgmt_kubeconfig, metadata['cluster_id'], cluster_name, "Management") if mgmt_kubeconfig != "" else 0
+            preflight_ch = executor.submit(_preflight_wait, rosa_cmnd, metadata['cluster_id'], cluster_name)
+            sc_namespace_timing = sc_namespace.result()
+            mc_namespace_timing = mc_namespace.result()
+            preflight_checks = preflight_ch.result()
         watch_cmd = [rosa_cmnd, "logs", "install", "-c", cluster_name, "--watch"]
         logging.debug(watch_cmd)
         watch_process = subprocess.Popen(watch_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
@@ -535,8 +580,9 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, create_operator_roles
         metadata['cluster-admin-create'] = return_data['cluster-admin-create'] if 'cluster-admin-create' in return_data else 0
         metadata['cluster-admin-login'] = return_data['cluster-admin-login'] if 'cluster-admin-login' in return_data else 0
         metadata['cluster-oc-adm'] = return_data['cluster-oc-adm'] if 'cluster-oc-adm' in return_data else 0
-        metadata['mgmt_namespace'] = mgmt_namespace_timing
+        metadata['mgmt_namespace'] = mc_namespace_timing
         metadata['sc_namespace'] = sc_namespace_timing
+        metadata['preflight_checks'] = preflight_checks
         if kubeconfig == "":
             logging.error("Failed to download kubeconfig file. Disabling wait for workers and e2e-benchmarking execution on %s" % cluster_name)
             wait_time = 0
@@ -1343,7 +1389,7 @@ def main():
 
     if args.create_vpc:
         vpcs = _create_vpcs(terraform_cmnd, args.terraform_retry, my_path, cluster_name_seed, args.cluster_count, args.aws_region)
-        if vpcs == 1:
+        if not vpcs:
             logging.error("Failed to create AWS VPCs, destroying them and exiting...")
             _destroy_vpcs(terraform_cmnd, args.terraform_retry, my_path, args.aws_region, vpcs)
             exit(1)
@@ -1389,7 +1435,7 @@ def main():
                 if args.workers.isdigit():
                     workers = int(args.workers)
                 else:
-                    num = int(args.workers.split(",")[(loop_counter - 1) % len(args.workers.split(","))])
+                    workers = int(args.workers.split(",")[(loop_counter - 1) % len(args.workers.split(","))])
                 if args.add_cluster_load:
                     low_jobs = max(0, int((args.cluster_load_jobs_per_worker * workers) - (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100)))
                     high_jobs = int((args.cluster_load_jobs_per_worker * workers) + (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100))
