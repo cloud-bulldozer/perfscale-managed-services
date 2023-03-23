@@ -450,7 +450,7 @@ def _preflight_wait(rosa_cmnd, cluster_id, cluster_name):
     return_data = {}
     start_time = int(time.time())
     previous_status = ""
-    for trying in range(1, 151):
+    for trying in range(1, 1801):
         if force_terminate:
             logging.error("Exiting preflight times capturing on %s cluster after capturing Ctrl-C" % cluster_name)
             return 0
