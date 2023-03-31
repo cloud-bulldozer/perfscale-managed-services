@@ -1209,8 +1209,8 @@ def main():
         help='If selected, collect must-gather from all cluster, if not, only collect from failed clusters')
     parser.add_argument(
         '--oidc-config-id',
-        action='store_true',
         type=str,
+        required=True,
         help='Pass a custom oidc config id to use for the oidc provider. NOTE: this is not deleted on cleanup')
 # Delete following parameter and code when default security group wont be used
     parser.add_argument(
