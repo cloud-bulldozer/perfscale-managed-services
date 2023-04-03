@@ -525,7 +525,7 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
     return 0
 
 
-def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name):
+def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name, oidc_config_id):
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
     os.mkdir(cluster_path)
@@ -539,6 +539,9 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
     if provision_shard:
         cluster_cmd.append("--properties")
         cluster_cmd.append("provision_shard_id:" + provision_shard)
+    if oidc_config_id:
+        cluster_cmd.append("--oidc-config-id")
+        cluster_cmd.append(oidc_config_id)
     if args.wildcard_options:
         for param in args.wildcard_options.split():
             cluster_cmd.append(param)
@@ -939,7 +942,7 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
     logging.info('Watcher terminated')
 
 
-def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uuid, es, index, index_retry):
+def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uuid, es, index, index_retry, oidc_config_id):
     cluster_path = my_path + "/" + cluster_name
     metadata = get_metadata(cluster_name, rosa_cmnd)
     logging.debug('Destroying cluster name: %s' % cluster_name)
@@ -957,11 +960,12 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
     stdout, stderr = process_operator.communicate()
     if process_operator.returncode != 0:
         logging.error("Failed to delete operator roles on cluster %s" % cluster_name)
-    delete_oidc_providers = [rosa_cmnd, "delete", "oidc-provider", "-c", cluster_name, "-m", "auto", "-y"]
-    process_oidc = subprocess.Popen(delete_oidc_providers, stdout=cleanup_log, stderr=cleanup_log, preexec_fn=disable_signals)
-    stdout, stderr = process_oidc.communicate()
-    if process_oidc.returncode != 0:
-        logging.error("Failed to delete identity providers on cluster %s" % cluster_name)
+    if not oidc_config_id:
+        delete_oidc_providers = [rosa_cmnd, "delete", "oidc-provider", "-c", cluster_name, "-m", "auto", "-y"]
+        process_oidc = subprocess.Popen(delete_oidc_providers, stdout=cleanup_log, stderr=cleanup_log, preexec_fn=disable_signals)
+        stdout, stderr = process_oidc.communicate()
+        if process_oidc.returncode != 0:
+            logging.error("Failed to delete identity providers on cluster %s" % cluster_name)
     cluster_end_time = int(time.time())
     metadata['install_method'] = "rosa"
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
@@ -990,9 +994,10 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
         aws_roles = _destroy_aws_iam_roles(cluster_name)
         if aws_roles != 0:
             logging.error("Failed to destroy AWS IAM Roles of %s (%s)" % (cluster_name, metadata['cluster_id']))
-        aws_oidc = _destroy_aws_iam_oidc(cluster_name, metadata['cluster_id'])
-        if aws_oidc != 0:
-            logging.error("Failed to destroy AWS IAM OIDC of %s (%s)" % (cluster_name, metadata['cluster_id']))
+        if not oidc_config_id:
+            aws_oidc = _destroy_aws_iam_oidc(cluster_name, metadata['cluster_id'])
+            if aws_oidc != 0:
+                logging.error("Failed to destroy AWS IAM OIDC of %s (%s)" % (cluster_name, metadata['cluster_id']))
 
 
 def _destroy_aws_iam_oidc(cluster_name, cluster_id):
@@ -1202,6 +1207,11 @@ def main():
         '--must-gather-all',
         action='store_true',
         help='If selected, collect must-gather from all cluster, if not, only collect from failed clusters')
+    parser.add_argument(
+        '--oidc-config-id',
+        type=str,
+        required=True,
+        help='Pass a custom oidc config id to use for the oidc provider. NOTE: this is not deleted on cleanup')
 # Delete following parameter and code when default security group wont be used
     parser.add_argument(
         '--manually-cleanup-secgroups',
@@ -1439,7 +1449,7 @@ def main():
                     vpc_info = vpcs[(loop_counter - 1)]
                     logging.debug("Creating cluster on VPC %s, with subnets: %s" % (vpc_info[0], vpc_info[1]))
                 try:
-                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster))
+                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, args.oidc_config_id))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
@@ -1491,7 +1501,7 @@ def main():
             if 'name' in cluster and cluster_name_seed in cluster['name']:
                 logging.debug('Starting cluster cleanup %s' % cluster['name'])
                 try:
-                    thread = threading.Thread(target=_cleanup_cluster, args=(rosa_cmnd, cluster['name'], args.mgmt_cluster, my_path, my_uuid, es, args.es_index, args.es_index_retry))
+                    thread = threading.Thread(target=_cleanup_cluster, args=(rosa_cmnd, cluster['name'], args.mgmt_cluster, my_path, my_uuid, es, args.es_index, args.es_index_retry, args.oidc_config_id))
                 except Exception as err:
                     logging.error('Thread creation failed')
                     logging.error(err)
