@@ -880,6 +880,14 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
     time.sleep(60)
     logging.info('Watcher thread started')
     logging.info('Getting status every %d seconds' % int(delay))
+    # watcher will stop iterating and notify to run e2e if one of the below conditions met
+    # 1) look if all the clusters move to ready state or
+    # 2) if the user created e2e file in the test directory
+    file_path = os.path.join(my_path, "e2e")
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        time.sleep(60)
+
     cmd = [rosa_cmnd, "list", "clusters", "-o", "json"]
     while not force_terminate:
         logging.debug(cmd)
@@ -934,6 +942,11 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
             else:
                 logging.info("Waiting %d seconds for next watcher run" % delay)
                 time.sleep(delay)
+        elif os.path.isfile(file_path):
+            with all_clusters_installed:
+                logging.info("User requested the wrapper to start e2e testing by creating e2e file in the test directory")
+                all_clusters_installed.notify_all()
+            break
         else:
             logging.info("Waiting %d seconds for next watcher run" % delay)
             time.sleep(delay)
