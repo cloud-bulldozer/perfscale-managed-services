@@ -137,6 +137,47 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
     logging.info('ocm command validated with -h. Directory is %s' % my_path)
     return (ocm_cmnd, rosa_cmnd)
 
+def _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path):
+    logging.info('Creating OIDC Provider')
+    oidc_gen_cmd = [rosa_cmnd, 'create', 'oidc-config', '--mode=auto', '-y', '--prefix', cluster_name_seed]
+    oidc_gen_log = open(my_path + "/" + 'oidc_config_id_gen.log', 'w')
+    oidc_gen_process = subprocess.Popen(oidc_gen_cmd, stdout=oidc_gen_log, stderr=oidc_gen_log)
+    oidc_gen_stdout, oidc_gen_stderr = oidc_gen_process.communicate()
+    if oidc_gen_process.returncode != 0:
+        logging.error('Unable to generate OIDC Provider. Please check logfile %s' % my_path + "/" + 'oidc_config_id_gen.log')
+        exit(1)
+    
+    # the rosa cli output does not give us the OIDC Provider ID so we need to scrape it after
+    oidc_get_cmd = [rosa_cmnd, 'list', 'oidc-config', '-o', 'json']
+    oidc_get_process = subprocess.Popen(oidc_get_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    oidc_get_stdout, oidc_get_stderr = oidc_get_process.communicate()
+    if oidc_get_process.returncode != 0:
+        logging.error('rosa list oidc-config -o json command returned an error. Exiting...')
+        logging.error(oidc_get_stderr.strip().decode("utf-8"))
+        exit(1)
+    for oidc_item in json.loads(oidc_get_stdout.decode("utf-8")):
+        if cluster_name_seed in oidc_item['issuer_url']:
+            logging.info('OIDC Provider found. ID is %s' % oidc_item['id'])
+            return oidc_item['id']
+    logging.error('OIDC ID %s not found in rosa list oidc-config' % oidc_config_id)
+    logging.error(oidc_get_stdout.strip().decode("utf-8"))
+    exit(1)
+
+def _verify_oidc_config_id(oidc_config_id, rosa_cmnd, my_path):
+    logging.info('Verifying %s is in list of OIDC Providers' % oidc_config_id)
+    oidc_verify_cmd = [rosa_cmnd, 'list', 'oidc-config', '-o', 'json']
+    oidc_verify_process = subprocess.Popen(oidc_verify_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    oidc_verify_stdout, oidc_verify_stderr = oidc_verify_process.communicate()
+    if oidc_verify_process.returncode != 0:
+        logging.error('rosa list oidc-config -o json command returned an error. Exiting...')
+        return False
+    for oidc_id in json.loads(oidc_verify_stdout.decode("utf-8")):
+        if oidc_id['id'] == oidc_config_id:
+            logging.info('Found OIDC ID %s' % oidc_config_id)
+            return True
+    logging.error('OIDC ID %s not found in rosa list oidc-config' % oidc_config_id)
+    logging.error(oidc_verify_stdout.strip().decode("utf-8"))
+    return False
 
 def _verify_terraform(terraform_cmnd, my_path):
     logging.info('Testing terraform command with: terraform -version')
@@ -908,7 +949,7 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
     logging.info('Watcher terminated')
 
 
-def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uuid, es, index, index_retry, oidc_config_id):
+def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uuid, es, index, index_retry):
     cluster_path = my_path + "/" + cluster_name
     metadata = get_metadata(cluster_name, rosa_cmnd)
     logging.debug('Destroying cluster name: %s' % cluster_name)
@@ -926,12 +967,6 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
     stdout, stderr = process_operator.communicate()
     if process_operator.returncode != 0:
         logging.error("Failed to delete operator roles on cluster %s" % cluster_name)
-    if not oidc_config_id:
-        delete_oidc_providers = [rosa_cmnd, "delete", "oidc-provider", "-c", cluster_name, "-m", "auto", "-y"]
-        process_oidc = subprocess.Popen(delete_oidc_providers, stdout=cleanup_log, stderr=cleanup_log, preexec_fn=disable_signals)
-        stdout, stderr = process_oidc.communicate()
-        if process_oidc.returncode != 0:
-            logging.error("Failed to delete identity providers on cluster %s" % cluster_name)
     cluster_end_time = int(time.time())
     metadata['install_method'] = "rosa"
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
@@ -960,10 +995,6 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
         aws_roles = _destroy_aws_iam_roles(cluster_name)
         if aws_roles != 0:
             logging.error("Failed to destroy AWS IAM Roles of %s (%s)" % (cluster_name, metadata['cluster_id']))
-        if not oidc_config_id:
-            aws_oidc = _destroy_aws_iam_oidc(cluster_name, metadata['cluster_id'])
-            if aws_oidc != 0:
-                logging.error("Failed to destroy AWS IAM OIDC of %s (%s)" % (cluster_name, metadata['cluster_id']))
 
 
 def _destroy_aws_iam_oidc(cluster_name, cluster_id):
@@ -1176,7 +1207,6 @@ def main():
     parser.add_argument(
         '--oidc-config-id',
         type=str,
-        required=True,
         help='Pass a custom oidc config id to use for the oidc provider. NOTE: this is not deleted on cleanup')
 # Delete following parameter and code when default security group wont be used
     parser.add_argument(
@@ -1335,7 +1365,17 @@ def main():
         else:
             logging.info('`rosa init` execution OK')
             logging.debug(rosa_init_stdout.strip().decode("utf-8"))
-
+    
+    if args.oidc_config_id:
+        oidc_config_id = args.oidc_config_id
+        oidc_cleanup = False
+        if not _verify_oidc_config_id(oidc_config_id, rosa_cmnd, my_path):
+            logging.error('Provided oidc-config-id %s is not found in ROSA account. Exiting...' % oidc_config_id)
+            exit(1)
+    else:
+        oidc_config_id = _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path)
+        oidc_cleanup = True
+    
     # Get connected to management cluster
     logging.info("Getting information of %s management cluster on %s organization" % (args.mgmt_cluster, args.mgmt_org_id))
     mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, args.mgmt_cluster, args.mgmt_org_id, args.aws_region, es, args.es_index, args.es_index_retry, my_uuid, args.cluster_count)
@@ -1415,7 +1455,7 @@ def main():
                     vpc_info = vpcs[(loop_counter - 1)]
                     logging.debug("Creating cluster on VPC %s, with subnets: %s" % (vpc_info[0], vpc_info[1]))
                 try:
-                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, args.oidc_config_id))
+                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, oidc_config_id))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
@@ -1467,7 +1507,7 @@ def main():
             if 'name' in cluster and cluster_name_seed in cluster['name']:
                 logging.debug('Starting cluster cleanup %s' % cluster['name'])
                 try:
-                    thread = threading.Thread(target=_cleanup_cluster, args=(rosa_cmnd, cluster['name'], args.mgmt_cluster, my_path, my_uuid, es, args.es_index, args.es_index_retry, args.oidc_config_id))
+                    thread = threading.Thread(target=_cleanup_cluster, args=(rosa_cmnd, cluster['name'], args.mgmt_cluster, my_path, my_uuid, es, args.es_index, args.es_index_retry ))
                 except Exception as err:
                     logging.error('Thread creation failed')
                     logging.error(err)
@@ -1488,6 +1528,14 @@ def main():
                     continue
                 else:
                     raise
+        
+        if oidc_cleanup:
+            delete_oidc_cmd = [rosa_cmnd, 'delete', 'oidc-config', '--oidc-config-id', oidc_config_id, '-m', 'auto', '-y']
+            delete_oidc_process = subprocess.Popen(delete_oidc_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            delete_oidc_stdout, delete_oidc_stderr = delete_oidc_process.communicate()
+            if delete_oidc_process.returncode != 0:
+                logging.error('Deletion of OIDC ID %s failed. Manual Cleanup Required' % oidc_config_id)
+                logging.error(delete_oidc_stderr.strip().decode("utf-8"))
 
         if args.create_vpc:
             destroy_result = _destroy_vpcs(terraform_cmnd, args.terraform_retry, my_path, args.aws_region, vpcs)
