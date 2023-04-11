@@ -568,7 +568,6 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
         watch_stdout, watch_stderr = watch_process.communicate()
         cluster_end_time = int(time.time())
         metadata = get_metadata(cluster_name, rosa_cmnd)
-        _index_mgmt_cluster_stats(my_uuid, cluster_name, cluster_path, mgmt_cluster_name, svc_cluster_name, es, es_url, index_retry, cluster_start_time, cluster_end_time)
         return_data = _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, cluster_path)
         kubeconfig = return_data['kubeconfig'] if 'kubeconfig' in return_data else ""
         metadata['cluster-admin-create'] = return_data['cluster-admin-create'] if 'cluster-admin-create' in return_data else 0
@@ -633,68 +632,6 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
         time.sleep(random_sleep)
         logging.info("Saving must-gather file of hosted cluster %s" % cluster_name)
         _get_must_gather(cluster_path, cluster_name)
-
-
-def _index_mgmt_cluster_stats(my_uuid, cluster_name, my_path, mgmt_cluster_name, svc_cluster_name, es, es_url, index_retry, start_time, end_time):
-    myenv = os.environ.copy()
-    metadata = {}
-    prom_url = os.environ["PROM_URL"]
-    logging.info('Cloning e2e-benchmarking repo https://github.com/cloud-bulldozer/e2e-benchmarking.git')
-    Repo.clone_from("https://github.com/cloud-bulldozer/e2e-benchmarking.git", my_path + '/e2e-benchmarking')
-    url = 'https://github.com/cloud-bulldozer/kube-burner/releases/download/v1.3/kube-burner-1.3-Linux-x86_64.tar.gz'
-    dest = my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz"
-    response = requests.get(url, stream=True)
-    with open(dest, 'wb') as f:
-        f.write(response.raw.read())
-    untar_kb = ["tar", "xzf", my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", "-C", my_path + "/"]
-    logging.debug(untar_kb)
-    untar_kb_process = subprocess.Popen(untar_kb, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    stdout, stderr = untar_kb_process.communicate()
-    if untar_kb_process.returncode != 0:
-        logging.error("Failed to untar Kube-burner from %s to %s" % (my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", my_path + "/kube-burner"))
-        return 1
-    os.chmod(my_path + '/kube-burner', 0o777)
-    kb_cmd = my_path + '/kube-burner'
-
-    metadata['platform'] = "ROSA"
-    metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
-    metadata['cluster_name'] = cluster_name
-    metadata['mgmt_cluster_name'] = mgmt_cluster_name + "-.*"
-    metadata['uuid'] = my_uuid
-    metadata['svc_cluster_name'] = svc_cluster_name + "-.*"
-    metadata['sdn_type'] = "OVNKubernetes"
-    es_ignored_metadata = ""
-    common._index_result(es, "ripsaw-kube-burner", metadata, es_ignored_metadata, index_retry)
-
-    q_time = int(round(datetime.datetime.utcnow().timestamp()))
-    myenv["MGMT_CLUSTER_NAME"] = mgmt_cluster_name + "-.*"
-    myenv["SVC_CLUSTER_NAME"] = svc_cluster_name + "-.*"
-    myenv["HOSTED_CLUSTER_NS"] = ".*-" + cluster_name
-    myenv["HOSTED_CLUSTER_NAME"] = "install-metrics-" + cluster_name
-    myenv["Q_TIME"] = str(q_time)
-    myenv["ES_SERVER"] = es_url
-    myenv["ES_INDEX"] = "ripsaw-kube-burner"
-
-    metric_config_envsubst = ["envsubst <" + my_path + "/e2e-benchmarking/workloads/kube-burner/metrics-profiles/hypershift-metrics.yaml >" + my_path + "/hypershift-metrics.yaml"]
-    build_config_envsubst = ["envsubst <" + my_path + "/e2e-benchmarking/workloads/kube-burner/workloads/managed-services/baseconfig.yml >" + my_path + "/baseconfig.yml"]
-    mc_process = subprocess.Popen(metric_config_envsubst, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    stdout, stderr = mc_process.communicate()
-    if mc_process.returncode != 0:
-        logging.error("Failed to envsubst %s" % (stderr))
-        return 1
-
-    bc_process = subprocess.Popen(build_config_envsubst, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    stdout, stderr = bc_process.communicate()
-    if bc_process.returncode != 0:
-        logging.error("Failed to envsubst %s" % (stderr))
-        return 1
-
-    kube_burner_cmd = [kb_cmd, "index", "--uuid", my_uuid, "--prometheus-url", prom_url, "--start", str(start_time), "--end", str(end_time), "--step", "2m", "--metrics-profile", my_path + "/hypershift-metrics.yaml", "--config", my_path + "/baseconfig.yml"]
-    kb_process = subprocess.Popen(kube_burner_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    stdout, stderr = kb_process.communicate()
-    if kb_process.returncode != 0:
-        logging.error("Failed to run kube-burner index %s" % (stderr))
-        return 1
 
 
 def _get_workers_ready(kubeconfig, cluster_name):
@@ -766,6 +703,22 @@ def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name):
 def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, jobs, es_url):
     load_env = os.environ.copy()
     load_env["KUBECONFIG"] = kubeconfig
+    logging.info('Cloning e2e-benchmarking repo https://github.com/cloud-bulldozer/e2e-benchmarking.git')
+    Repo.clone_from("https://github.com/cloud-bulldozer/e2e-benchmarking.git", my_path + '/e2e-benchmarking')
+    url = 'https://github.com/cloud-bulldozer/kube-burner/releases/download/v1.3/kube-burner-1.3-Linux-x86_64.tar.gz'
+    dest = my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz"
+    response = requests.get(url, stream=True)
+    with open(dest, 'wb') as f:
+        f.write(response.raw.read())
+    untar_kb = ["tar", "xzf", my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", "-C", my_path + "/"]
+    logging.debug(untar_kb)
+    untar_kb_process = subprocess.Popen(untar_kb, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    stdout, stderr = untar_kb_process.communicate()
+    if untar_kb_process.returncode != 0:
+        logging.error("Failed to untar Kube-burner from %s to %s" % (my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", my_path + "/kube-burner"))
+        return 1
+    os.chmod(my_path + '/kube-burner', 0o777)
+
     os.chdir(my_path + '/e2e-benchmarking/workloads/kube-burner')
     load_env["JOB_ITERATIONS"] = str(jobs)
     load_env["CHURN"] = "true"
