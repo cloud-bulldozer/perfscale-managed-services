@@ -753,7 +753,7 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, s
         f.write(response.raw.read())
     untar_kb = ["tar", "xzf", my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", "-C", my_path + "/"]
     logging.debug(untar_kb)
-    untar_kb_process = subprocess.Popen(untar_kb, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
+    untar_kb_process = subprocess.Popen(untar_kb, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=load_env)
     stdout, stderr = untar_kb_process.communicate()
     if untar_kb_process.returncode != 0:
         logging.error("Failed to untar Kube-burner from %s to %s" % (my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", my_path + "/kube-burner"))
