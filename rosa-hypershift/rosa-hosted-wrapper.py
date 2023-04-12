@@ -933,6 +933,11 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
                 logging.info('All clusters on ready status and no loading process required. Waiting 5 extra minutes to allow all cluster installations to finish.')
                 time.sleep(300)
                 break
+            elif os.path.isfile(file_path):
+                with all_clusters_installed:
+                    logging.info("User requested the wrapper to start e2e testing by creating e2e file in the test directory")
+                    all_clusters_installed.notify_all()
+                break                
             else:
                 logging.info("Waiting %d seconds for next watcher run" % delay)
                 time.sleep(delay)
