@@ -137,6 +137,47 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
     logging.info('ocm command validated with -h. Directory is %s' % my_path)
     return (ocm_cmnd, rosa_cmnd)
 
+def _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path):
+    logging.info('Creating OIDC Provider')
+    oidc_gen_cmd = [rosa_cmnd, 'create', 'oidc-config', '--mode=auto', '-y', '--prefix', cluster_name_seed]
+    oidc_gen_log = open(my_path + "/" + 'oidc_config_id_gen.log', 'w')
+    oidc_gen_process = subprocess.Popen(oidc_gen_cmd, stdout=oidc_gen_log, stderr=oidc_gen_log)
+    oidc_gen_stdout, oidc_gen_stderr = oidc_gen_process.communicate()
+    if oidc_gen_process.returncode != 0:
+        logging.error('Unable to generate OIDC Provider. Please check logfile %s' % my_path + "/" + 'oidc_config_id_gen.log')
+        exit(1)
+    
+    # the rosa cli output does not give us the OIDC Provider ID so we need to scrape it after
+    oidc_get_cmd = [rosa_cmnd, 'list', 'oidc-config', '-o', 'json']
+    oidc_get_process = subprocess.Popen(oidc_get_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    oidc_get_stdout, oidc_get_stderr = oidc_get_process.communicate()
+    if oidc_get_process.returncode != 0:
+        logging.error('rosa list oidc-config -o json command returned an error. Exiting...')
+        logging.error(oidc_get_stderr.strip().decode("utf-8"))
+        exit(1)
+    for oidc_item in json.loads(oidc_get_stdout.decode("utf-8")):
+        if cluster_name_seed in oidc_item['issuer_url']:
+            logging.info('OIDC Provider found. ID is %s' % oidc_item['id'])
+            return oidc_item['id']
+    logging.error('OIDC ID %s not found in rosa list oidc-config' % oidc_config_id)
+    logging.error(oidc_get_stdout.strip().decode("utf-8"))
+    exit(1)
+
+def _verify_oidc_config_id(oidc_config_id, rosa_cmnd, my_path):
+    logging.info('Verifying %s is in list of OIDC Providers' % oidc_config_id)
+    oidc_verify_cmd = [rosa_cmnd, 'list', 'oidc-config', '-o', 'json']
+    oidc_verify_process = subprocess.Popen(oidc_verify_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    oidc_verify_stdout, oidc_verify_stderr = oidc_verify_process.communicate()
+    if oidc_verify_process.returncode != 0:
+        logging.error('rosa list oidc-config -o json command returned an error. Exiting...')
+        return False
+    for oidc_id in json.loads(oidc_verify_stdout.decode("utf-8")):
+        if oidc_id['id'] == oidc_config_id:
+            logging.info('Found OIDC ID %s' % oidc_config_id)
+            return True
+    logging.error('OIDC ID %s not found in rosa list oidc-config' % oidc_config_id)
+    logging.error(oidc_verify_stdout.strip().decode("utf-8"))
+    return False
 
 def _verify_terraform(terraform_cmnd, my_path):
     logging.info('Testing terraform command with: terraform -version')
@@ -450,7 +491,7 @@ def _preflight_wait(rosa_cmnd, cluster_id, cluster_name):
     return_data = {}
     start_time = int(time.time())
     previous_status = ""
-    for trying in range(1, 151):
+    for trying in range(1, 1801):
         if force_terminate:
             logging.error("Exiting preflight times capturing on %s cluster after capturing Ctrl-C" % cluster_name)
             return 0
@@ -525,7 +566,7 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
     return 0
 
 
-def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name):
+def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name, oidc_config_id):
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
     os.mkdir(cluster_path)
@@ -539,6 +580,9 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
     if provision_shard:
         cluster_cmd.append("--properties")
         cluster_cmd.append("provision_shard_id:" + provision_shard)
+    if oidc_config_id:
+        cluster_cmd.append("--oidc-config-id")
+        cluster_cmd.append(oidc_config_id)
     if args.wildcard_options:
         for param in args.wildcard_options.split():
             cluster_cmd.append(param)
@@ -565,7 +609,6 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
         watch_stdout, watch_stderr = watch_process.communicate()
         cluster_end_time = int(time.time())
         metadata = get_metadata(cluster_name, rosa_cmnd)
-        _index_mgmt_cluster_stats(my_uuid, cluster_name, cluster_path, mgmt_cluster_name, svc_cluster_name, es, es_url, index_retry, cluster_start_time, cluster_end_time)
         return_data = _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, cluster_path)
         kubeconfig = return_data['kubeconfig'] if 'kubeconfig' in return_data else ""
         metadata['cluster-admin-create'] = return_data['cluster-admin-create'] if 'cluster-admin-create' in return_data else 0
@@ -630,68 +673,6 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
         time.sleep(random_sleep)
         logging.info("Saving must-gather file of hosted cluster %s" % cluster_name)
         _get_must_gather(cluster_path, cluster_name)
-
-
-def _index_mgmt_cluster_stats(my_uuid, cluster_name, my_path, mgmt_cluster_name, svc_cluster_name, es, es_url, index_retry, start_time, end_time):
-    myenv = os.environ.copy()
-    metadata = {}
-    prom_url = os.environ["PROM_URL"]
-    logging.info('Cloning e2e-benchmarking repo https://github.com/cloud-bulldozer/e2e-benchmarking.git')
-    Repo.clone_from("https://github.com/cloud-bulldozer/e2e-benchmarking.git", my_path + '/e2e-benchmarking')
-    url = 'https://github.com/cloud-bulldozer/kube-burner/releases/download/v1.3/kube-burner-1.3-Linux-x86_64.tar.gz'
-    dest = my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz"
-    response = requests.get(url, stream=True)
-    with open(dest, 'wb') as f:
-        f.write(response.raw.read())
-    untar_kb = ["tar", "xzf", my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", "-C", my_path + "/"]
-    logging.debug(untar_kb)
-    untar_kb_process = subprocess.Popen(untar_kb, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    stdout, stderr = untar_kb_process.communicate()
-    if untar_kb_process.returncode != 0:
-        logging.error("Failed to untar Kube-burner from %s to %s" % (my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", my_path + "/kube-burner"))
-        return 1
-    os.chmod(my_path + '/kube-burner', 0o777)
-    kb_cmd = my_path + '/kube-burner'
-
-    metadata['platform'] = "ROSA"
-    metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
-    metadata['cluster_name'] = cluster_name
-    metadata['mgmt_cluster_name'] = mgmt_cluster_name + "-.*"
-    metadata['uuid'] = my_uuid
-    metadata['svc_cluster_name'] = svc_cluster_name + "-.*"
-    metadata['sdn_type'] = "OVNKubernetes"
-    es_ignored_metadata = ""
-    common._index_result(es, "ripsaw-kube-burner", metadata, es_ignored_metadata, index_retry)
-
-    q_time = int(round(datetime.datetime.utcnow().timestamp()))
-    myenv["MGMT_CLUSTER_NAME"] = mgmt_cluster_name + "-.*"
-    myenv["SVC_CLUSTER_NAME"] = svc_cluster_name + "-.*"
-    myenv["HOSTED_CLUSTER_NS"] = ".*-" + cluster_name
-    myenv["HOSTED_CLUSTER_NAME"] = "install-metrics-" + cluster_name
-    myenv["Q_TIME"] = str(q_time)
-    myenv["ES_SERVER"] = es_url
-    myenv["ES_INDEX"] = "ripsaw-kube-burner"
-
-    metric_config_envsubst = ["envsubst <" + my_path + "/e2e-benchmarking/workloads/kube-burner/metrics-profiles/hypershift-metrics.yaml >" + my_path + "/hypershift-metrics.yaml"]
-    build_config_envsubst = ["envsubst <" + my_path + "/e2e-benchmarking/workloads/kube-burner/workloads/managed-services/baseconfig.yml >" + my_path + "/baseconfig.yml"]
-    mc_process = subprocess.Popen(metric_config_envsubst, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    stdout, stderr = mc_process.communicate()
-    if mc_process.returncode != 0:
-        logging.error("Failed to envsubst %s" % (stderr))
-        return 1
-
-    bc_process = subprocess.Popen(build_config_envsubst, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    stdout, stderr = bc_process.communicate()
-    if bc_process.returncode != 0:
-        logging.error("Failed to envsubst %s" % (stderr))
-        return 1
-
-    kube_burner_cmd = [kb_cmd, "index", "--uuid", my_uuid, "--prometheus-url", prom_url, "--start", str(start_time), "--end", str(end_time), "--step", "2m", "--metrics-profile", my_path + "/hypershift-metrics.yaml", "--config", my_path + "/baseconfig.yml"]
-    kb_process = subprocess.Popen(kube_burner_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    stdout, stderr = kb_process.communicate()
-    if kb_process.returncode != 0:
-        logging.error("Failed to run kube-burner index %s" % (stderr))
-        return 1
 
 
 def _get_workers_ready(kubeconfig, cluster_name):
@@ -763,6 +744,22 @@ def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name):
 def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, jobs, es_url):
     load_env = os.environ.copy()
     load_env["KUBECONFIG"] = kubeconfig
+    logging.info('Cloning e2e-benchmarking repo https://github.com/cloud-bulldozer/e2e-benchmarking.git')
+    Repo.clone_from("https://github.com/cloud-bulldozer/e2e-benchmarking.git", my_path + '/e2e-benchmarking')
+    url = 'https://github.com/cloud-bulldozer/kube-burner/releases/download/v1.3/kube-burner-1.3-Linux-x86_64.tar.gz'
+    dest = my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz"
+    response = requests.get(url, stream=True)
+    with open(dest, 'wb') as f:
+        f.write(response.raw.read())
+    untar_kb = ["tar", "xzf", my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", "-C", my_path + "/"]
+    logging.debug(untar_kb)
+    untar_kb_process = subprocess.Popen(untar_kb, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=load_env)
+    stdout, stderr = untar_kb_process.communicate()
+    if untar_kb_process.returncode != 0:
+        logging.error("Failed to untar Kube-burner from %s to %s" % (my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", my_path + "/kube-burner"))
+        return 1
+    os.chmod(my_path + '/kube-burner', 0o777)
+
     os.chdir(my_path + '/e2e-benchmarking/workloads/kube-burner')
     load_env["JOB_ITERATIONS"] = str(jobs)
     load_env["CHURN"] = "true"
@@ -877,6 +874,14 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
     time.sleep(60)
     logging.info('Watcher thread started')
     logging.info('Getting status every %d seconds' % int(delay))
+    # watcher will stop iterating and notify to run e2e if one of the below conditions met
+    # 1) look if all the clusters move to ready state or
+    # 2) if the user created e2e file in the test directory
+    file_path = os.path.join(my_path, "e2e")
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        time.sleep(60)
+
     cmd = [rosa_cmnd, "list", "clusters", "-o", "json"]
     while not force_terminate:
         logging.debug(cmd)
@@ -916,7 +921,12 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
             logging.info(state_output)
         if error:
             logging.warning('Clusters in error state: %s' % error)
-        if installed_clusters == cluster_count:
+        if os.path.isfile(file_path):
+            with all_clusters_installed:
+                logging.info("User requested the wrapper to start e2e testing by creating e2e file in the test directory")
+                all_clusters_installed.notify_all()
+            break            
+        elif installed_clusters == cluster_count:
             if cluster_load and clusters_with_all_workers == cluster_count:
                 logging.info('All clusters on ready status and all clusters with all workers ready. Waiting 5 extra minutes to allow all cluster installations to arrive notify status')
                 time.sleep(300)
@@ -957,11 +967,6 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
     stdout, stderr = process_operator.communicate()
     if process_operator.returncode != 0:
         logging.error("Failed to delete operator roles on cluster %s" % cluster_name)
-    delete_oidc_providers = [rosa_cmnd, "delete", "oidc-provider", "-c", cluster_name, "-m", "auto", "-y"]
-    process_oidc = subprocess.Popen(delete_oidc_providers, stdout=cleanup_log, stderr=cleanup_log, preexec_fn=disable_signals)
-    stdout, stderr = process_oidc.communicate()
-    if process_oidc.returncode != 0:
-        logging.error("Failed to delete identity providers on cluster %s" % cluster_name)
     cluster_end_time = int(time.time())
     metadata['install_method'] = "rosa"
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
@@ -990,9 +995,6 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
         aws_roles = _destroy_aws_iam_roles(cluster_name)
         if aws_roles != 0:
             logging.error("Failed to destroy AWS IAM Roles of %s (%s)" % (cluster_name, metadata['cluster_id']))
-        aws_oidc = _destroy_aws_iam_oidc(cluster_name, metadata['cluster_id'])
-        if aws_oidc != 0:
-            logging.error("Failed to destroy AWS IAM OIDC of %s (%s)" % (cluster_name, metadata['cluster_id']))
 
 
 def _destroy_aws_iam_oidc(cluster_name, cluster_id):
@@ -1202,6 +1204,10 @@ def main():
         '--must-gather-all',
         action='store_true',
         help='If selected, collect must-gather from all cluster, if not, only collect from failed clusters')
+    parser.add_argument(
+        '--oidc-config-id',
+        type=str,
+        help='Pass a custom oidc config id to use for the oidc provider. NOTE: this is not deleted on cleanup')
 # Delete following parameter and code when default security group wont be used
     parser.add_argument(
         '--manually-cleanup-secgroups',
@@ -1359,7 +1365,17 @@ def main():
         else:
             logging.info('`rosa init` execution OK')
             logging.debug(rosa_init_stdout.strip().decode("utf-8"))
-
+    
+    if args.oidc_config_id:
+        oidc_config_id = args.oidc_config_id
+        oidc_cleanup = False
+        if not _verify_oidc_config_id(oidc_config_id, rosa_cmnd, my_path):
+            logging.error('Provided oidc-config-id %s is not found in ROSA account. Exiting...' % oidc_config_id)
+            exit(1)
+    else:
+        oidc_config_id = _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path)
+        oidc_cleanup = True
+    
     # Get connected to management cluster
     logging.info("Getting information of %s management cluster on %s organization" % (args.mgmt_cluster, args.mgmt_org_id))
     mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, args.mgmt_cluster, args.mgmt_org_id, args.aws_region, es, args.es_index, args.es_index_retry, my_uuid, args.cluster_count)
@@ -1439,7 +1455,7 @@ def main():
                     vpc_info = vpcs[(loop_counter - 1)]
                     logging.debug("Creating cluster on VPC %s, with subnets: %s" % (vpc_info[0], vpc_info[1]))
                 try:
-                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster))
+                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, oidc_config_id))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
@@ -1491,7 +1507,7 @@ def main():
             if 'name' in cluster and cluster_name_seed in cluster['name']:
                 logging.debug('Starting cluster cleanup %s' % cluster['name'])
                 try:
-                    thread = threading.Thread(target=_cleanup_cluster, args=(rosa_cmnd, cluster['name'], args.mgmt_cluster, my_path, my_uuid, es, args.es_index, args.es_index_retry))
+                    thread = threading.Thread(target=_cleanup_cluster, args=(rosa_cmnd, cluster['name'], args.mgmt_cluster, my_path, my_uuid, es, args.es_index, args.es_index_retry ))
                 except Exception as err:
                     logging.error('Thread creation failed')
                     logging.error(err)
@@ -1512,6 +1528,14 @@ def main():
                     continue
                 else:
                     raise
+        
+        if oidc_cleanup:
+            delete_oidc_cmd = [rosa_cmnd, 'delete', 'oidc-config', '--oidc-config-id', oidc_config_id, '-m', 'auto', '-y']
+            delete_oidc_process = subprocess.Popen(delete_oidc_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            delete_oidc_stdout, delete_oidc_stderr = delete_oidc_process.communicate()
+            if delete_oidc_process.returncode != 0:
+                logging.error('Deletion of OIDC ID %s failed. Manual Cleanup Required' % oidc_config_id)
+                logging.error(delete_oidc_stderr.strip().decode("utf-8"))
 
         if args.create_vpc:
             destroy_result = _destroy_vpcs(terraform_cmnd, args.terraform_retry, my_path, args.aws_region, vpcs)

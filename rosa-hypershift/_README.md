@@ -75,6 +75,7 @@ without uploading any information**
 | --cleanup-clusters | Cleanup any non-error state clusters upon test completion. | False |
 | --log-file | File where to write logs. | -- |
 | --log-level | Level of logs to show. | INFO |
+| --oidc-config-id | Use a specific OIDC for all cluster creations. <br>**NOTE**: This is not removed upon cleanup<\br> | -- |
 | --only-delete-clusters | Delete clusters found on folder specified by **--path**.<br>**NOTE: It will fail if no cluster_name_seed file is found on folder | False |
 | --wildcard-options | [Any other option to be passed to the rosa binary](#wildcard-variable) | -- |
 
