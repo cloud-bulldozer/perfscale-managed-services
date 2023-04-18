@@ -957,18 +957,27 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
     process = subprocess.Popen(del_cmd, stdout=cleanup_log, stderr=cleanup_log, preexec_fn=disable_signals)
     stdout, stderr = process.communicate()
     cluster_delete_end_time = int(time.time())
-    
-    logging.debug('Confirm cluster %s deleted by attempting to describe the cluster. This should fail if the cluster is removed.' % cluster_name)
-    check_cmd = [rosa_cmnd, "describe", "cluster", "-c", cluster_name]
-    process_check = subprocess.Popen(check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = process_check.communicate()
-    if process_check.returncode != 0:
-        logging.debug('Destroying STS associated resources of cluster name: %s' % cluster_name)
-        delete_operator_roles = [rosa_cmnd, "delete", "operator-roles", "--prefix", cluster_name, "-m", "auto", "-y"]
-        process_operator = subprocess.Popen(delete_operator_roles, stdout=cleanup_log, stderr=cleanup_log, preexec_fn=disable_signals)
-        stdout, stderr = process_operator.communicate()
-        if process_operator.returncode != 0:
-            logging.error("Failed to delete operator roles on cluster %s" % cluster_name)
+
+    if process.returncode != 0:
+        logging.error('Hosted cluster destroy failed for cluster name %s with this stdout/stderr:' % cluster_name)
+        logging.error(stdout)
+        logging.error(stderr)
+        metadata['status'] = "not deleted"
+    else:
+        logging.debug('Confirm cluster %s deleted by attempting to describe the cluster. This should fail if the cluster is removed.' % cluster_name)
+        check_cmd = [rosa_cmnd, "describe", "cluster", "-c", cluster_name]
+        process_check = subprocess.Popen(check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr = process_check.communicate()
+        if process_check.returncode != 0:
+            logging.debug('Destroying STS associated resources of cluster name: %s' % cluster_name)
+            delete_operator_roles = [rosa_cmnd, "delete", "operator-roles", "--prefix", cluster_name, "-m", "auto", "-y"]
+            process_operator = subprocess.Popen(delete_operator_roles, stdout=cleanup_log, stderr=cleanup_log, preexec_fn=disable_signals)
+            stdout, stderr = process_operator.communicate()
+            if process_operator.returncode != 0:
+                logging.error("Failed to delete operator roles on cluster %s" % cluster_name)
+        else:
+            logging.error('Cluster %s still in list of clusters. Not Removing Roles' % cluster_name)
+            metadata['status'] = "not deleted"
     
     cluster_end_time = int(time.time())
     metadata['install_method'] = "rosa"
@@ -979,11 +988,6 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
     metadata['load_duration'] = ""
     metadata['operation'] = "destroy"
     metadata['uuid'] = my_uuid
-    if process.returncode != 0 and process_check.returncode == 0:
-        logging.error('Hosted cluster destroy failed for cluster name %s with this stdout/stderr:' % cluster_name)
-        logging.error(stdout)
-        logging.error(stderr)
-        metadata['status'] = "not deleted"
     try:
         with open(my_path + "/" + cluster_name + "/metadata_destroy.json", "w") as metadata_file:
             json.dump(metadata, metadata_file)
