@@ -573,16 +573,13 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
     logging.debug('Attempting cluster installation')
     logging.debug('Output directory set to %s' % cluster_path)
     cluster_name = cluster_name_seed + "-" + str(my_inc).zfill(4)
-    cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, "--replicas", str(worker_nodes), "--hosted-cp", "--multi-az", "--sts", "--mode", "auto", "-y", "--output", "json"]
+    cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, "--replicas", str(worker_nodes), "--hosted-cp", "--multi-az", "--sts", "--mode", "auto", "-y", "--output", "json", "--operator-roles-prefix", cluster_name, "--oidc-config-id", oidc_config_id]
     if create_vpc:
         cluster_cmd.append("--subnet-ids")
         cluster_cmd.append(vpc_info[1])
     if provision_shard:
         cluster_cmd.append("--properties")
         cluster_cmd.append("provision_shard_id:" + provision_shard)
-    if oidc_config_id:
-        cluster_cmd.append("--oidc-config-id")
-        cluster_cmd.append(oidc_config_id)
     if args.wildcard_options:
         for param in args.wildcard_options.split():
             cluster_cmd.append(param)
@@ -626,7 +623,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
             logging.info("Waiting %d minutes for %d workers to be ready on %s" % (wait_time, worker_nodes, cluster_name))
             workers_ready = _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name)
             cluster_workers_ready = int(time.time())
-            logging.info("%d workers ready after %d minutes on %s" % (workers_ready, cluster_workers_ready - cluster_start_time, cluster_name))
+            logging.info("%d workers ready after %d seconds on %s" % (workers_ready, cluster_workers_ready - cluster_start_time, cluster_name))
             if cluster_load and workers_ready != worker_nodes:
                 logging.error("Insufficient number of workers (%d). Expected: %d. Disabling e2e-benchmarking execution on %s" % (workers_ready, worker_nodes, cluster_name))
                 cluster_load = False
@@ -870,7 +867,7 @@ def get_metadata(cluster_name, rosa_cmnd):
     return metadata
 
 
-def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uuid, clusters_resume, all_clusters_installed, cluster_load):
+def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uuid, all_clusters_installed, cluster_load):
     time.sleep(60)
     logging.info('Watcher thread started')
     logging.info('Getting status every %d seconds' % int(delay))
@@ -960,13 +957,19 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
     process = subprocess.Popen(del_cmd, stdout=cleanup_log, stderr=cleanup_log, preexec_fn=disable_signals)
     stdout, stderr = process.communicate()
     cluster_delete_end_time = int(time.time())
-
-    logging.debug('Destroying STS associated resources of cluster name: %s' % cluster_name)
-    delete_operator_roles = [rosa_cmnd, "delete", "operator-roles", "-c", cluster_name, "-m", "auto", "-y"]
-    process_operator = subprocess.Popen(delete_operator_roles, stdout=cleanup_log, stderr=cleanup_log, preexec_fn=disable_signals)
-    stdout, stderr = process_operator.communicate()
-    if process_operator.returncode != 0:
-        logging.error("Failed to delete operator roles on cluster %s" % cluster_name)
+    
+    logging.debug('Confirm cluster %s deleted by attempting to describe the cluster. This should fail if the cluster is removed.' % cluster_name)
+    check_cmd = [rosa_cmnd, "describe", "cluster", "-c", cluster_name]
+    process_check = subprocess.Popen(check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout, stderr = process_check.communicate()
+    if process_check.returncode != 0:
+        logging.debug('Destroying STS associated resources of cluster name: %s' % cluster_name)
+        delete_operator_roles = [rosa_cmnd, "delete", "operator-roles", "--prefix", cluster_name, "-m", "auto", "-y"]
+        process_operator = subprocess.Popen(delete_operator_roles, stdout=cleanup_log, stderr=cleanup_log, preexec_fn=disable_signals)
+        stdout, stderr = process_operator.communicate()
+        if process_operator.returncode != 0:
+            logging.error("Failed to delete operator roles on cluster %s" % cluster_name)
+    
     cluster_end_time = int(time.time())
     metadata['install_method'] = "rosa"
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
@@ -976,7 +979,7 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
     metadata['load_duration'] = ""
     metadata['operation'] = "destroy"
     metadata['uuid'] = my_uuid
-    if process.returncode != 0:
+    if process.returncode != 0 and process_check.returncode == 0:
         logging.error('Hosted cluster destroy failed for cluster name %s with this stdout/stderr:' % cluster_name)
         logging.error(stdout)
         logging.error(stderr)
@@ -991,97 +994,6 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
         metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
         es_ignored_metadata = ""
         common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
-    if args.manually_cleanup_aws_iam:
-        aws_roles = _destroy_aws_iam_roles(cluster_name)
-        if aws_roles != 0:
-            logging.error("Failed to destroy AWS IAM Roles of %s (%s)" % (cluster_name, metadata['cluster_id']))
-
-
-def _destroy_aws_iam_oidc(cluster_name, cluster_id):
-    logging.info("Geting AWS OpenID Providers of %s" % cluster_name)
-    oidc_list_cmnd = ["aws", "iam", "list-open-id-connect-providers", "--output", "json"]
-    logging.debug(oidc_list_cmnd)
-    oidc_list_process = subprocess.Popen(oidc_list_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    oidc_list_stdout, oidc_list_stderr = oidc_list_process.communicate()
-    return_code = 0
-    if oidc_list_process.returncode == 0:
-        for provider in json.loads(oidc_list_stdout.decode("utf-8"))['OpenIDConnectProviderList']:
-            if cluster_id in provider['Arn']:
-                logging.info("Deleting OIDC Provider %s of cluster: %s" % (provider['Arn'], cluster_name))
-                delete_oidc_cmnd = ["aws", "iam", "delete-open-id-connect-provider", "--open-id-connect-provider-arn", provider['Arn']]
-                logging.debug(delete_oidc_cmnd)
-                delete_oidc_process = subprocess.Popen(delete_oidc_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                delete_oidc_stdout, delete_oidc_stderr = delete_oidc_process.communicate()
-                if delete_oidc_process.returncode != 0:
-                    logging.error("Failed to delete OIDC provider %s for cluster %s" % (provider['Arn'], cluster_name))
-                    logging.error(delete_oidc_stdout)
-                    logging.error(delete_oidc_stderr)
-                    return_code += 1
-                else:
-                    logging.info("Deleted OIDC Provider %s for cluster %s" % (provider['Arn'], cluster_name))
-        return return_code
-    else:
-        logging.error("Failed to list OIDC Providers")
-        logging.error(oidc_list_stdout)
-        logging.error(oidc_list_stderr)
-        return 1
-
-
-def _destroy_aws_iam_roles(cluster_name):
-    logging.info("Geting AWS Roles of %s" % cluster_name)
-    roles_list_cmnd = ["aws", "iam", "list-roles", "--output", "json"]
-    logging.debug(roles_list_cmnd)
-    roles_list_process = subprocess.Popen(roles_list_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    roles_list_stdout, roles_list_stderr = roles_list_process.communicate()
-    if roles_list_process.returncode == 0:
-        return_code = 0
-        for role in json.loads(roles_list_stdout.decode("utf-8"))['Roles']:
-            if cluster_name in role['RoleName']:
-                logging.info("Listing attached policies of Role: %s" % role['RoleName'])
-                attached_role_policies_cmnd = ["aws", "iam", "list-attached-role-policies", "--role-name", role['RoleName'], "--output", "json"]
-                logging.debug(attached_role_policies_cmnd)
-                attached_role_policies_process = subprocess.Popen(attached_role_policies_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                attached_role_policies_stdout, attached_role_policies_stderr = attached_role_policies_process.communicate()
-                if attached_role_policies_process.returncode == 0:
-                    policy_detach_errors = 0
-                    for policy in json.loads(attached_role_policies_stdout.decode("utf-8"))['AttachedPolicies']:
-                        logging.info("Detaching policy %s from Role %s of %s cluster" % (policy['PolicyName'], role['RoleName'], cluster_name))
-                        policy_detach_command = ["aws", "iam", "detach-role-policy", "--role-name", role['RoleName'], "--policy-arn", policy['PolicyArn']]
-                        logging.debug(policy_detach_command)
-                        policy_detach_process = subprocess.Popen(policy_detach_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                        policy_detach_stdout, policy_detach_stderr = policy_detach_process.communicate()
-                        if policy_detach_process.returncode != 0:
-                            logging.error("Failed to list dettach policy %s from role %s for cluster %s" % (policy['PolicyName'], role['RoleName'], cluster_name))
-                            logging.error(policy_detach_stdout)
-                            logging.error(policy_detach_stderr)
-                            policy_detach_errors += 1
-                        else:
-                            logging.info("Dettached policy %s from role %s for cluster %s" % (policy['PolicyName'], role['RoleName'], cluster_name))
-                    if policy_detach_errors == 0:
-                        logging.info("Deleting Role: %s" % role['RoleName'])
-                        delete_role_cmnd = ['aws', 'iam', 'delete-role', "--role-name", role['RoleName']]
-                        logging.debug(delete_role_cmnd)
-                        delete_role_process = subprocess.Popen(delete_role_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                        delete_role_stdout, delete_role_stderr = delete_role_process.communicate()
-                        if delete_role_process.returncode != 0:
-                            logging.error("Failed to delete role %s for cluster %s" % (role['RoleName'], cluster_name))
-                            logging.error(delete_role_stdout)
-                            logging.error(delete_role_stderr)
-                            return_code += 1
-                        else:
-                            logging.info("Deleted role %s for cluster %s" % (role['RoleName'], cluster_name))
-                else:
-                    logging.error("Failed to list attached role policies of role %s for cluster %s" % (role['RoleName'], cluster_name))
-                    logging.error(attached_role_policies_stdout)
-                    logging.error(attached_role_policies_stderr)
-                    return_code += 1
-        return return_code
-    else:
-        logging.error("Failed to list aws roles")
-        logging.error(roles_list_stdout)
-        logging.error(roles_list_stderr)
-        return 1
-
 
 def main():
     parser = argparse.ArgumentParser(description="hypershift wrapper script",
@@ -1213,10 +1125,6 @@ def main():
         '--manually-cleanup-secgroups',
         action='store_true',
         help='If selected, delete security groups before deleting the VPC')
-    parser.add_argument(
-        '--manually-cleanup-aws-iam',
-        action='store_true',
-        help='If selected, delete AWS Roles and OpenID Providers from AWS')
 
     global args
     args = parser.parse_args()
@@ -1403,11 +1311,10 @@ def main():
 
     # launch watcher thread to report status
     logging.info('Launching watcher thread')
-    clusters_resume = {}
     global force_terminate
     force_terminate = False
     all_clusters_installed = threading.Condition()
-    watcher = threading.Thread(target=_watcher, args=(rosa_cmnd, my_path, cluster_name_seed, args.cluster_count, args.watcher_delay, my_uuid, clusters_resume, all_clusters_installed, args.add_cluster_load))
+    watcher = threading.Thread(target=_watcher, args=(rosa_cmnd, my_path, cluster_name_seed, args.cluster_count, args.watcher_delay, my_uuid, all_clusters_installed, args.add_cluster_load))
     signal.signal(signal.SIGINT, set_force_terminate)
     watcher.daemon = True
     watcher.start()
@@ -1546,22 +1453,24 @@ def main():
         logging.info('Cleaning working directory %s' % my_path)
         shutil.rmtree(my_path)
 
+    stuck_clusters = [rosa_cmnd, 'list', 'clusters', '-o', 'json']
+    stuck_process = subprocess.Popen(stuck_clusters, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stuck_stdout, stuck_stderr = stuck_process.communicate()
+
 # Last, output test result
     logging.info('************************************************************************')
     logging.info('********* Summary for test %s *********' % (my_uuid))
     logging.info('************************************************************************')
     logging.info('Requested Clusters for test %s: %d' % (my_uuid, args.cluster_count))
-    if 'clusters_created' in clusters_resume:
-        logging.info('Created   Clusters for test %s: %d' % (my_uuid, clusters_resume['clusters_created']))
-        if 'state' in clusters_resume:
-            for i1 in clusters_resume['state'].items():
-                logging.info('              %s: %s' % (str(i1[0]), str(i1[1])))
-    else:
-        logging.info('Created   Clusters for test %s: 0' % (my_uuid))
     logging.info('Batches size: %s' % (str(args.batch_size)))
     logging.info('Delay between batches: %s' % (str(args.delay_between_batch)))
     logging.info('Cluster Name Seed: %s' % (cluster_name_seed))
-
+    if stuck_process.returncode != 0:
+        logging.error('Could not validate if any clusters were stuck')
+    else:
+        for cluster_exists in json.loads(stuck_stdout):
+            if cluster_name_seed in cluster_exists["name"]:
+                logging.info('%s still exists' % cluster_exists["name"])
 
 if __name__ == '__main__':
     sys.exit(main())
