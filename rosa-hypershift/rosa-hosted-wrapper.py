@@ -1449,7 +1449,8 @@ def main():
                 logging.error(delete_oidc_stderr.strip().decode("utf-8"))
 
         if args.create_vpc:
-            destroy_result = _destroy_vpcs(terraform_cmnd, args.terraform_retry, my_path, args.aws_region, vpcs)
+            # Hard code to a single destroy vpc retry so we do not endlessly retry when clusters fail to uninstall
+            destroy_result = _destroy_vpcs(terraform_cmnd, 1, my_path, args.aws_region, vpcs)
             if destroy_result == 1:
                 logging.error("Failed to destroy all VPCs, please manually delete them")
 
