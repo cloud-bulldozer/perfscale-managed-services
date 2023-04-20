@@ -566,7 +566,7 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
     return 0
 
 
-def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name, oidc_config_id, workload_type, kube_burner_version, e2e_git_details, git_branch):
+def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name, oidc_config_id, workload_type, kube_burner_version, e2e_git_details, git_branch, worker_label):
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
     os.mkdir(cluster_path)
@@ -662,7 +662,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
             logging.info('Waiting for all clusters to be installed to start e2e-benchmarking execution on %s' % cluster_name)
             all_clusters_installed.wait()
         logging.info('Executing e2e-benchmarking to add load on the cluster %s with %s nodes during %s with %d iterations' % (cluster_name, str(worker_nodes), load_duration, job_iterations))
-        _cluster_load(kubeconfig, cluster_path, cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, job_iterations, es_url, mgmt_kubeconfig, workload_type, kube_burner_version, e2e_git_details, git_branch)
+        _cluster_load(kubeconfig, cluster_path, cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, job_iterations, es_url, mgmt_kubeconfig, workload_type, kube_burner_version, e2e_git_details, git_branch, worker_label)
         logging.info('Finished execution of e2e-benchmarking workload on %s' % cluster_name)
     if must_gather_all or process.returncode != 0:
         random_sleep = random.randint(60, 300)
@@ -738,7 +738,7 @@ def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name):
     return ready_nodes
 
 
-def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, jobs, es_url, mgmt_kubeconfig, workload_type, kube_burner_version, e2e_git_details, git_branch):
+def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, jobs, es_url, mgmt_kubeconfig, workload_type, kube_burner_version, e2e_git_details, git_branch, worker_label):
     load_env = os.environ.copy()
     load_env["KUBECONFIG"] = kubeconfig
     load_env["MC_KUBECONFIG"] = mgmt_kubeconfig
@@ -989,8 +989,23 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
         es_ignored_metadata = ""
         common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
 
-def _label_node(worker_):
-    logging.info("Update the required labels on nodes")
+# This func() will label required nodes, requires top-level directory to kubeconfig,
+# cluster_name  & worker_name, worker_label defaults to 
+def _label_nodes(my_path, cluster_name, worker_name, worker_label):
+    logging.info("Update the labels on nodes")
+    label_env = os.environ.copy()
+    label_env["KUBECONFIG"] = my_path + "/" + cluster_name + "/kubeconfig"
+    oc_label_cmd = ["oc", "label", "node", worker_name ,worker_label]
+    logging.debug(oc_label_cmd)
+    process = subprocess.Popen(oc_label_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=label_env)
+    stdout, stderr = oc_label_process.communicate()
+    if process.returncode != 0:
+        logging.error('%s unable to execute `oc label node`' % oc_label_cmd)
+        logging.error(stderr)
+        exit(1)
+    else:
+        logging.info('`oc label node` execution OK')
+        logging.debug(stdout)
     
 
 def main():
@@ -1146,7 +1161,7 @@ def main():
         '--worker-label',
         type=str,
         help= 'Specify the label of specific worker nodes of a machinepool',
-        default='node-role.kubernetes.io/obo!=""'
+        default='node-role.kubernetes.io/obo='
     )
 # Delete following parameter and code when default security group wont be used
     parser.add_argument(
@@ -1390,7 +1405,7 @@ def main():
                     vpc_info = vpcs[(loop_counter - 1)]
                     logging.debug("Creating cluster on VPC %s, with subnets: %s" % (vpc_info[0], vpc_info[1]))
                 try:
-                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, oidc_config_id, args.workload_type, args.kube_burner_version, args.e2e_git_details, args.git_branch))
+                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, oidc_config_id, args.workload_type, args.kube_burner_version, args.e2e_git_details, args.git_branch, args.worker_label))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
