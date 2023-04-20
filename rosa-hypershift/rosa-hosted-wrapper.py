@@ -744,8 +744,8 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, s
     load_env["MC_KUBECONFIG"] = mgmt_kubeconfig
     logging.info('Cloning e2e-benchmarking repo %s', )
     Repo.clone_from(e2e_git_details, my_path + '/e2e-benchmarking', branch=git_branch)
-    url = "https://github.com/cloud-bulldozer/kube-burner/releases/download/v"+ kube_burner_version + "/kube-burner-" + kube_burner_version + "-Linux-x86_64.tar.gz"
-    dest = my_path + "/kube-burner-"+ kube_burner_version + "-Linux-x86_64.tar.gz"
+    url = "https://github.com/cloud-bulldozer/kube-burner/releases/download/v" + kube_burner_version + "/kube-burner-" + kube_burner_version + "-Linux-x86_64.tar.gz"
+    dest = my_path + "/kube-burner-" + kube_burner_version + "-Linux-x86_64.tar.gz"
     response = requests.get(url, stream=True)
     with open(dest, 'wb') as f:
         f.write(response.raw.read())
@@ -760,7 +760,7 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, s
 
     os.chdir(my_path + '/e2e-benchmarking/workloads/kube-burner-ocp-wrapper')
     load_env["ITERATIONS"] = str(jobs)
-    load_env["EXTRA_FLAGS"] = "--churn-duration="+ load_duration +" --churn-percent=10 --churn-delay=30s"
+    load_env["EXTRA_FLAGS"] = "--churn-duration=" + load_duration + " --churn-percent=10 --churn-delay=30s"
     if es_url is not None:
         load_env["ES_SERVER"] = es_url
     load_env["LOG_LEVEL"] = "debug"
