@@ -137,16 +137,18 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
     logging.info('ocm command validated with -h. Directory is %s' % my_path)
     return (ocm_cmnd, rosa_cmnd)
 
+
 def _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path):
     logging.info('Creating OIDC Provider')
     oidc_gen_cmd = [rosa_cmnd, 'create', 'oidc-config', '--mode=auto', '-y', '--prefix', cluster_name_seed]
+    logging.debug(oidc_gen_cmd)
     oidc_gen_log = open(my_path + "/" + 'oidc_config_id_gen.log', 'w')
     oidc_gen_process = subprocess.Popen(oidc_gen_cmd, stdout=oidc_gen_log, stderr=oidc_gen_log)
     oidc_gen_stdout, oidc_gen_stderr = oidc_gen_process.communicate()
     if oidc_gen_process.returncode != 0:
         logging.error('Unable to generate OIDC Provider. Please check logfile %s' % my_path + "/" + 'oidc_config_id_gen.log')
         exit(1)
-    
+
     # the rosa cli output does not give us the OIDC Provider ID so we need to scrape it after
     oidc_get_cmd = [rosa_cmnd, 'list', 'oidc-config', '-o', 'json']
     oidc_get_process = subprocess.Popen(oidc_get_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -159,9 +161,10 @@ def _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path):
         if cluster_name_seed in oidc_item['issuer_url']:
             logging.info('OIDC Provider found. ID is %s' % oidc_item['id'])
             return oidc_item['id']
-    logging.error('OIDC ID %s not found in rosa list oidc-config' % oidc_config_id)
+    logging.error('OIDC ID not found in rosa list oidc-config for cluster name seed %s' % cluster_name_seed)
     logging.error(oidc_get_stdout.strip().decode("utf-8"))
     exit(1)
+
 
 def _verify_oidc_config_id(oidc_config_id, rosa_cmnd, my_path):
     logging.info('Verifying %s is in list of OIDC Providers' % oidc_config_id)
@@ -178,6 +181,7 @@ def _verify_oidc_config_id(oidc_config_id, rosa_cmnd, my_path):
     logging.error('OIDC ID %s not found in rosa list oidc-config' % oidc_config_id)
     logging.error(oidc_verify_stdout.strip().decode("utf-8"))
     return False
+
 
 def _verify_terraform(terraform_cmnd, my_path):
     logging.info('Testing terraform command with: terraform -version')
@@ -912,7 +916,7 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
             with all_clusters_installed:
                 logging.info("User requested the wrapper to start e2e testing by creating e2e file in the test directory")
                 all_clusters_installed.notify_all()
-            break            
+            break
         elif installed_clusters == cluster_count:
             if cluster_load and clusters_with_all_workers == cluster_count:
                 logging.info('All clusters on ready status and all clusters with all workers ready. Waiting 5 extra minutes to allow all cluster installations to arrive notify status')
@@ -968,7 +972,7 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
         else:
             logging.error('Cluster %s still in list of clusters. Not Removing Roles' % cluster_name)
             metadata['status'] = "not deleted"
-    
+
     cluster_end_time = int(time.time())
     metadata['install_method'] = "rosa"
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
@@ -989,6 +993,7 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
         es_ignored_metadata = ""
         common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
     
+
 
 def main():
     parser = argparse.ArgumentParser(description="hypershift wrapper script",
@@ -1145,6 +1150,11 @@ def main():
         '--manually-cleanup-secgroups',
         action='store_true',
         help='If selected, delete security groups before deleting the VPC')
+    parser.add_argument(
+        '--wait-before-cleanup',
+        type=int,
+        default=0,
+        help="Number of minutes to wait before cleanup clusters")
 
     global args
     args = parser.parse_args()
@@ -1293,7 +1303,7 @@ def main():
         else:
             logging.info('`rosa init` execution OK')
             logging.debug(rosa_init_stdout.strip().decode("utf-8"))
-    
+
     if args.oidc_config_id:
         oidc_config_id = args.oidc_config_id
         oidc_cleanup = False
@@ -1303,7 +1313,7 @@ def main():
     else:
         oidc_config_id = _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path)
         oidc_cleanup = True
-    
+
     # Get connected to management cluster
     logging.info("Getting information of %s management cluster on %s organization" % (args.mgmt_cluster, args.mgmt_org_id))
     mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, args.mgmt_cluster, args.mgmt_org_id, args.aws_region, es, args.es_index, args.es_index_retry, my_uuid, args.cluster_count)
@@ -1417,6 +1427,8 @@ def main():
         _get_mgmt_cluster_must_gather(sc_kubeconfig_path, my_path)
 
     if args.cleanup_clusters:
+        logging.info("Waiting %d minutes before starting the deleting process" % args.wait_before_cleanup)
+        time.sleep(args.wait_before_cleanup * 60)
         logging.info('Attempting to delete all hosted clusters with seed %s' % (cluster_name_seed))
         delete_cluster_thread_list = []
         cmd = [rosa_cmnd, "list", "clusters", "-o", "json"]
@@ -1434,7 +1446,7 @@ def main():
             if 'name' in cluster and cluster_name_seed in cluster['name']:
                 logging.debug('Starting cluster cleanup %s' % cluster['name'])
                 try:
-                    thread = threading.Thread(target=_cleanup_cluster, args=(rosa_cmnd, cluster['name'], args.mgmt_cluster, my_path, my_uuid, es, args.es_index, args.es_index_retry ))
+                    thread = threading.Thread(target=_cleanup_cluster, args=(rosa_cmnd, cluster['name'], args.mgmt_cluster, my_path, my_uuid, es, args.es_index, args.es_index_retry))
                 except Exception as err:
                     logging.error('Thread creation failed')
                     logging.error(err)
@@ -1455,7 +1467,7 @@ def main():
                     continue
                 else:
                     raise
-        
+
         if oidc_cleanup:
             delete_oidc_cmd = [rosa_cmnd, 'delete', 'oidc-config', '--oidc-config-id', oidc_config_id, '-m', 'auto', '-y']
             delete_oidc_process = subprocess.Popen(delete_oidc_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -1492,6 +1504,7 @@ def main():
         for cluster_exists in json.loads(stuck_stdout):
             if cluster_name_seed in cluster_exists["name"]:
                 logging.info('%s still exists' % cluster_exists["name"])
+
 
 if __name__ == '__main__':
     sys.exit(main())
