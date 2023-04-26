@@ -773,7 +773,7 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, s
     load_command = ["./run.sh"] 
     if worker_label is not None:
         logging.info('Updating the metrics yaml files with label %s information' % worker_label)
-        _run_on_labels(my_path, cluster_name, worker_label, workload_type)
+        _run_on_labels(my_path, worker_label, workload_type)
     logging.debug(load_command)
     load_log = open(my_path + '/cluster_load.log', 'w')
     if not force_terminate:
@@ -783,13 +783,15 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, s
         logging.warning("Not starting e2e on cluster %s after capturing Ctrl-C" % hosted_cluster_name)
 
 def _run_on_labels(my_path, worker_label, workload_type):
-    logging.info('Extracting the %s workload metric files from kube-burner' % workload_type)
+    default_label = "worker"
+    logging.info('Extracting the %s workload files from kube-burner' % workload_type)
     os.chdir(my_path + '/e2e-benchmarking/workloads/kube-burner-ocp-wrapper')
     extract_command = ["kube-burner ", "ocp ", worker_label, " --extract"]
     logging.debug(extract_command)
     extract_process = subprocess.Popen(extract_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
     extract_stdout, extract_stderr = extract_process.communicate()
-    if process.returncode != 0:
+
+    if extract_process.returncode != 0:
         logging.error('unable to execute `kube-burner ocp %s`' % extract_command)
         logging.error(extract_stderr)
         exit(1)
@@ -797,10 +799,16 @@ def _run_on_labels(my_path, worker_label, workload_type):
         logging.info('`%s` execution OK' % extract_command)
         logging.debug(extract_stdout)
 
-    logging.info('Search and replace the label %s' % worker_label)
-    replace_command = ["sed -i .bak ", "'s/worker/", worker_label, "/g'", " $(find . -type f -name '*.yml"]
-    # sed -i '.bak' 's/worker/kube-burner/g' $(find . -type f -name '*.yml')
-    replace_command = []
+    logging.info('Search and replace the label %s' % worker_label)    
+    for root, dirs, filename in os.walk('.'):
+        for files in filename:
+            if files.endswith(".yml") or files.endswith(".yaml"):
+                with open(os.path.join(root, files), 'r+') as f:
+                    contents = f.read()
+                    f.seek(0)
+                    updated_contents = contents.replace(default_label, workload_type)
+                    f.write(updated_contents)
+                    f.close()
 
 def _get_must_gather(cluster_path, cluster_name):
     myenv = os.environ.copy()
