@@ -786,13 +786,13 @@ def _run_on_labels(my_path, worker_label, workload_type):
     default_label = "worker"
     logging.info('Extracting the %s workload files from kube-burner' % workload_type)
     os.chdir(my_path + '/e2e-benchmarking/workloads/kube-burner-ocp-wrapper')
-    extract_command = ["kube-burner ", "ocp ", worker_label, " --extract"]
+    extract_command = ["kube-burner ", "ocp ", workload_type, " --extract"]
     logging.debug(extract_command)
     extract_process = subprocess.Popen(extract_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
     extract_stdout, extract_stderr = extract_process.communicate()
 
     if extract_process.returncode != 0:
-        logging.error('unable to execute `kube-burner ocp %s`' % extract_command)
+        logging.error('unable to execute `%s`' % extract_command)
         logging.error(extract_stderr)
         exit(1)
     else:
@@ -806,7 +806,7 @@ def _run_on_labels(my_path, worker_label, workload_type):
                 with open(os.path.join(root, files), 'r+') as f:
                     contents = f.read()
                     f.seek(0)
-                    updated_contents = contents.replace(default_label, workload_type)
+                    updated_contents = contents.replace(default_label, worker_label)
                     f.write(updated_contents)
                     f.close()
 
@@ -1427,7 +1427,7 @@ def main():
                     vpc_info = vpcs[(loop_counter - 1)]
                     logging.debug("Creating cluster on VPC %s, with subnets: %s" % (vpc_info[0], vpc_info[1]))
                 try:
-                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, oidc_config_id, args.workload_type, args.kube_burner_version, args.e2e_git_details, args.git_branch, worker_label))
+                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, oidc_config_id, args.workload_type, args.kube_burner_version, args.e2e_git_details, args.git_branch, args.worker_label))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
