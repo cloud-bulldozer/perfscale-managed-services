@@ -1173,8 +1173,7 @@ def main():
         type=str,
         help='Specify a desired branch of the corresponding git',
         default='master'
-    )
-    
+    )    
     parser.add_argument(
         '--worker-labelling',
         type=str,
