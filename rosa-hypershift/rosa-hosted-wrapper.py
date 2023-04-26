@@ -570,7 +570,7 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
     return 0
 
 
-def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name, oidc_config_id):
+def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name, oidc_config_id, workload_type, kube_burner_version, e2e_git_details, git_branch):
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
     os.mkdir(cluster_path)
@@ -666,7 +666,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
             logging.info('Waiting for all clusters to be installed to start e2e-benchmarking execution on %s' % cluster_name)
             all_clusters_installed.wait()
         logging.info('Executing e2e-benchmarking to add load on the cluster %s with %s nodes during %s with %d iterations' % (cluster_name, str(worker_nodes), load_duration, job_iterations))
-        _cluster_load(kubeconfig, cluster_path, cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, job_iterations, es_url)
+        _cluster_load(kubeconfig, cluster_path, cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, job_iterations, es_url, mgmt_kubeconfig, workload_type, kube_burner_version, e2e_git_details, git_branch)
         logging.info('Finished execution of e2e-benchmarking workload on %s' % cluster_name)
     if must_gather_all or process.returncode != 0:
         random_sleep = random.randint(60, 300)
@@ -742,43 +742,33 @@ def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name):
     return ready_nodes
 
 
-def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, jobs, es_url):
+def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, jobs, es_url, mgmt_kubeconfig, workload_type, kube_burner_version, e2e_git_details, git_branch):
     load_env = os.environ.copy()
     load_env["KUBECONFIG"] = kubeconfig
-    logging.info('Cloning e2e-benchmarking repo https://github.com/cloud-bulldozer/e2e-benchmarking.git')
-    Repo.clone_from("https://github.com/cloud-bulldozer/e2e-benchmarking.git", my_path + '/e2e-benchmarking')
-    url = 'https://github.com/cloud-bulldozer/kube-burner/releases/download/v1.3/kube-burner-1.3-Linux-x86_64.tar.gz'
-    dest = my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz"
+    load_env["MC_KUBECONFIG"] = mgmt_kubeconfig
+    logging.info('Cloning e2e-benchmarking repo %s', )
+    Repo.clone_from(e2e_git_details, my_path + '/e2e-benchmarking', branch=git_branch)
+    url = "https://github.com/cloud-bulldozer/kube-burner/releases/download/v" + kube_burner_version + "/kube-burner-" + kube_burner_version + "-Linux-x86_64.tar.gz"
+    dest = my_path + "/kube-burner-" + kube_burner_version + "-Linux-x86_64.tar.gz"
     response = requests.get(url, stream=True)
     with open(dest, 'wb') as f:
         f.write(response.raw.read())
-    untar_kb = ["tar", "xzf", my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", "-C", my_path + "/"]
+    untar_kb = ["tar", "xzf", my_path + "/kube-burner-" + kube_burner_version + "-Linux-x86_64.tar.gz", "-C", my_path + "/"]
     logging.debug(untar_kb)
     untar_kb_process = subprocess.Popen(untar_kb, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=load_env)
     stdout, stderr = untar_kb_process.communicate()
     if untar_kb_process.returncode != 0:
-        logging.error("Failed to untar Kube-burner from %s to %s" % (my_path + "/kube-burner-1.3-Linux-x86_64.tar.gz", my_path + "/kube-burner"))
+        logging.error("Failed to untar Kube-burner from %s to %s" % (my_path + "/kube-burner-" + kube_burner_version + "-Linux-x86_64.tar.gz", my_path + "/kube-burner"))
         return 1
     os.chmod(my_path + '/kube-burner', 0o777)
 
-    os.chdir(my_path + '/e2e-benchmarking/workloads/kube-burner')
-    load_env["JOB_ITERATIONS"] = str(jobs)
-    load_env["CHURN"] = "true"
-    load_env["CHURN_DURATION"] = load_duration
-    load_env["CHURN_PERCENT"] = "10"
-    load_env["CHURN_DELAY"] = "30s"
-    load_env["JOB_TIMEOUT"] = "6h"
-    load_env["CLEANUP_WHEN_FINISH"] = "true"
-    load_env["INDEXING"] = "true"
-    load_env["HYPERSHIFT"] = "true"
-    load_env["MGMT_CLUSTER_NAME"] = mgmt_cluster_name + "-.*"
-    load_env["SVC_CLUSTER_NAME"] = svc_cluster_name + "-.*"
-    load_env["HOSTED_CLUSTER_NS"] = ".*-" + hosted_cluster_name
+    os.chdir(my_path + '/e2e-benchmarking/workloads/kube-burner-ocp-wrapper')
+    load_env["ITERATIONS"] = str(jobs)
+    load_env["EXTRA_FLAGS"] = "--churn-duration=" + load_duration + " --churn-percent=10 --churn-delay=30s"
     if es_url is not None:
         load_env["ES_SERVER"] = es_url
     load_env["LOG_LEVEL"] = "debug"
-    load_env["WORKLOAD"] = "cluster-density-ms"
-    load_env["JOB_PAUSE"] = str(randrange(100, 1000)) + "s"
+    load_env["WORKLOAD"] = str(workload_type)
     load_env["KUBE_DIR"] = my_path
     load_command = ["./run.sh"]
     logging.debug(load_command)
@@ -1002,6 +992,7 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
         metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
         es_ignored_metadata = ""
         common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
+    
 
 
 def main():
@@ -1129,6 +1120,31 @@ def main():
         '--oidc-config-id',
         type=str,
         help='Pass a custom oidc config id to use for the oidc provider. NOTE: this is not deleted on cleanup')
+    parser.add_argument(
+        '--workload-type',
+        type=str,
+        help="Pass the workload type: cluster-density, cluster-density-v2, cluster-density-ms",
+        default="cluster-density-ms"
+    )
+    parser.add_argument(
+        '--kube-burner-version',
+        type=str,
+        help= 'Kube-burner version, if none provided defaults to 1.5 ',
+        default='1.5'
+    )
+    parser.add_argument(
+        '--e2e-git-details',
+        type=str,
+        help= 'Supply the e2e-benchmarking Git URL',
+        default="https://github.com/cloud-bulldozer/e2e-benchmarking.git"
+    )
+    parser.add_argument(
+        '--git-branch',
+        type=str,
+        help='Specify a desired branch of the corresponding git',
+        default='master'
+    )
+
 # Delete following parameter and code when default security group wont be used
     parser.add_argument(
         '--manually-cleanup-secgroups',
@@ -1376,7 +1392,7 @@ def main():
                     vpc_info = vpcs[(loop_counter - 1)]
                     logging.debug("Creating cluster on VPC %s, with subnets: %s" % (vpc_info[0], vpc_info[1]))
                 try:
-                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, oidc_config_id))
+                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, oidc_config_id, args.workload_type, args.kube_burner_version, args.e2e_git_details, args.git_branch))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
