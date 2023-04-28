@@ -28,13 +28,12 @@ import requests
 import urllib
 import logging
 import configparser
-from distutils import version as ver
+from packaging import version as ver
 import threading
 import concurrent.futures
 from git import Repo
 from libs import common
 from libs import parentParsers
-from random import randrange
 
 
 def set_force_terminate(signum, frame):
@@ -63,14 +62,14 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
             tags_list.append(tag['ref'].split('/')[-1].split('v')[-1])
         logging.debug('List of tags: %s' % tags_list)
         if rosa_version == 'latest':
-            version = sorted(tags_list, key=ver.StrictVersion)[-1]
+            version = sorted(tags_list, key=ver.parse)[-1]
         else:
             version = None
             for tag in tags_list:
                 if tag == rosa_version:
                     version = tag
             if version is None:
-                version = sorted(tags_list, key=ver.StrictVersion)[-1]
+                version = sorted(tags_list, key=ver.parse)[-1]
                 logging.error('Invalid ROSA release %s, downloading latest release identified as %s' % (rosa_version, version))
         logging.info('Downloading ROSA release identified as %s' % version)
         try:
@@ -107,14 +106,14 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
             tags_list.append(tag['ref'].split('/')[-1].split('v')[-1])
         logging.debug('List of tags: %s' % tags_list)
         if ocm_version == 'latest':
-            version = sorted(tags_list, key=ver.StrictVersion)[-1]
+            version = sorted(tags_list, key=ver.parse)[-1]
         else:
             version = None
             for tag in tags_list:
                 if tag == ocm_version:
                     version = tag
             if version is None:
-                version = sorted(tags_list, key=ver.StrictVersion)[-1]
+                version = sorted(tags_list, key=ver.parse)[-1]
                 logging.error('Invalid OCM release %s, downloading latest release identified as %s' % (ocm_version, version))
         logging.info('Downloading OCM release identified as %s' % version)
         try:
@@ -140,7 +139,7 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
 
 def _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path):
     logging.info('Creating OIDC Provider')
-    oidc_gen_cmd = [rosa_cmnd, 'create', 'oidc-config', '--mode=auto', '-y', '--prefix', '--managed=false', cluster_name_seed]
+    oidc_gen_cmd = [rosa_cmnd, 'create', 'oidc-config', '--mode=auto', '--managed=false', '--prefix', cluster_name_seed, '-y']
     logging.debug(oidc_gen_cmd)
     oidc_gen_log = open(my_path + "/" + 'oidc_config_id_gen.log', 'w')
     oidc_gen_process = subprocess.Popen(oidc_gen_cmd, stdout=oidc_gen_log, stderr=oidc_gen_log)
@@ -181,6 +180,55 @@ def _verify_oidc_config_id(oidc_config_id, rosa_cmnd, my_path):
     logging.error('OIDC ID %s not found in rosa list oidc-config' % oidc_config_id)
     logging.error(oidc_verify_stdout.strip().decode("utf-8"))
     return False
+
+
+def _gen_operator_roles(rosa_cmnd, cluster_name_seed, my_path, oidc_id, installer_role_arn):
+    logging.info("Creating Operator Roles")
+    roles_cmd = [rosa_cmnd, 'create', 'operator-roles', '--prefix', cluster_name_seed, '-m', 'auto', '-y', '--hosted-cp', '--oidc-config-id', oidc_id, '--installer-role-arn', installer_role_arn]
+    logging.debug(roles_cmd)
+    roles_log = open(my_path + "/" + 'rosa_create_operator_roles.log', 'w')
+    roles_process = subprocess.Popen(roles_cmd, stdout=roles_log, stderr=roles_log)
+    roles_stdout, roles_stderr = roles_process.communicate()
+    if roles_process.returncode != 0:
+        logging.error('Unable to create operator roles. Please check logfile %s' % my_path + "/" + 'rosa_create_operator_roles.log')
+        exit(1)
+    else:
+        return True
+
+
+def _delete_operator_roles(rosa_cmnd, cluster_name_seed, my_path):
+    logging.info("Deleting Operator Roles with prefix: %s" % cluster_name_seed)
+    roles_cmd = [rosa_cmnd, 'delete', 'operator-roles', '--prefix', cluster_name_seed, '-m', 'auto', '-y']
+    logging.debug(roles_cmd)
+    roles_log = open(my_path + "/" + 'rosa_delete_operator_roles.log', 'w')
+    roles_process = subprocess.Popen(roles_cmd, stdout=roles_log, stderr=roles_log)
+    roles_stdout, roles_stderr = roles_process.communicate()
+    if roles_process.returncode != 0:
+        logging.error('Unable to delete operator roles. Please manually delete them using `rosa delete operator-roles --prefix %s -m auto -y and check logfile %s for errors' % (cluster_name_seed, my_path + "/" + 'rosa_create_operator_roles.log'))
+        return False
+    else:
+        return True
+
+
+def _find_installer_role_arn(rosa_cmnd, my_path):
+    logging.info("Find latest Installer Role ARN")
+    roles_cmd = [rosa_cmnd, 'list', 'account-roles', '-o', 'json']
+    logging.debug(roles_cmd)
+    roles_process = subprocess.Popen(roles_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    roles_stdout, roles_stderr = roles_process.communicate()
+    if roles_process.returncode != 0:
+        logging.error('Unable to list account Roles. Please check output result of `rosa list account-roles command`')
+        logging.error(roles_stdout)
+        logging.error(roles_stderr)
+        exit(1)
+    else:
+        installer_role_version = ver.parse("0")
+        installer_role_arn = None
+        for role in json.loads(roles_stdout.decode("utf-8")):
+            if role['RoleType'] == "Installer" and ver.parse(role['Version']) > installer_role_version:
+                installer_role_arn = role['RoleARN']
+                installer_role_version = ver.parse(role['Version'])
+        return installer_role_arn
 
 
 def _verify_terraform(terraform_cmnd, my_path):
@@ -570,14 +618,14 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
     return 0
 
 
-def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name, oidc_config_id, workload_type, kube_burner_version, e2e_git_details, git_branch):
+def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name, oidc_config_id, workload_type, kube_burner_version, e2e_git_details, git_branch, operator_roles_prefix):
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
     os.mkdir(cluster_path)
     logging.debug('Attempting cluster installation')
     logging.debug('Output directory set to %s' % cluster_path)
     cluster_name = cluster_name_seed + "-" + str(my_inc).zfill(4)
-    cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, "--replicas", str(worker_nodes), "--hosted-cp", "--multi-az", "--sts", "--mode", "auto", "-y", "--output", "json", "--operator-roles-prefix", cluster_name, "--oidc-config-id", oidc_config_id]
+    cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, "--replicas", str(worker_nodes), "--hosted-cp", "--sts", "--mode", "auto", "-y", "--output", "json", "--oidc-config-id", oidc_config_id]
     if create_vpc:
         cluster_cmd.append("--subnet-ids")
         cluster_cmd.append(vpc_info[1])
@@ -587,6 +635,9 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
     if args.wildcard_options:
         for param in args.wildcard_options.split():
             cluster_cmd.append(param)
+    if operator_roles_prefix:
+        cluster_cmd.append("--operator-roles-prefix")
+        cluster_cmd.append(cluster_name_seed)
     logging.debug(cluster_cmd)
     installation_log = open(cluster_path + "/" + 'installation.log', 'w')
     cluster_start_time = int(time.time())
@@ -992,7 +1043,6 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
         metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
         es_ignored_metadata = ""
         common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
-    
 
 
 def main():
@@ -1121,29 +1171,29 @@ def main():
         type=str,
         help='Pass a custom oidc config id to use for the oidc provider. NOTE: this is not deleted on cleanup')
     parser.add_argument(
+        '--common-operator-roles',
+        action='store_true',
+        help='Create unique operator roles and use them on all the cluster installations')
+    parser.add_argument(
         '--workload-type',
         type=str,
         help="Pass the workload type: cluster-density, cluster-density-v2, cluster-density-ms",
-        default="cluster-density-ms"
-    )
+        default="cluster-density-ms")
     parser.add_argument(
         '--kube-burner-version',
         type=str,
-        help= 'Kube-burner version, if none provided defaults to 1.5 ',
-        default='1.5'
-    )
+        help='Kube-burner version, if none provided defaults to 1.5 ',
+        default='1.5')
     parser.add_argument(
         '--e2e-git-details',
         type=str,
-        help= 'Supply the e2e-benchmarking Git URL',
-        default="https://github.com/cloud-bulldozer/e2e-benchmarking.git"
-    )
+        help='Supply the e2e-benchmarking Git URL',
+        default="https://github.com/cloud-bulldozer/e2e-benchmarking.git")
     parser.add_argument(
         '--git-branch',
         type=str,
         help='Specify a desired branch of the corresponding git',
-        default='master'
-    )
+        default='master')
 
 # Delete following parameter and code when default security group wont be used
     parser.add_argument(
@@ -1314,6 +1364,11 @@ def main():
         oidc_config_id = _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path)
         oidc_cleanup = True
 
+    if args.common_operator_roles:
+        installer_role_arn = _find_installer_role_arn(rosa_cmnd, my_path)
+        roles_created = _gen_operator_roles(rosa_cmnd, cluster_name_seed, my_path, oidc_config_id, installer_role_arn)
+        operator_roles_prefix = cluster_name_seed if roles_created else ""
+
     # Get connected to management cluster
     logging.info("Getting information of %s management cluster on %s organization" % (args.mgmt_cluster, args.mgmt_org_id))
     mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, args.mgmt_cluster, args.mgmt_org_id, args.aws_region, es, args.es_index, args.es_index_retry, my_uuid, args.cluster_count)
@@ -1392,7 +1447,7 @@ def main():
                     vpc_info = vpcs[(loop_counter - 1)]
                     logging.debug("Creating cluster on VPC %s, with subnets: %s" % (vpc_info[0], vpc_info[1]))
                 try:
-                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, oidc_config_id, args.workload_type, args.kube_burner_version, args.e2e_git_details, args.git_branch))
+                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, oidc_config_id, args.workload_type, args.kube_burner_version, args.e2e_git_details, args.git_branch, operator_roles_prefix))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
@@ -1467,6 +1522,8 @@ def main():
                     continue
                 else:
                     raise
+
+        deleted_roles = _delete_operator_roles(rosa_cmnd, cluster_name_seed, my_path) if args.common_operator_roles else None
 
         if oidc_cleanup:
             delete_oidc_cmd = [rosa_cmnd, 'delete', 'oidc-config', '--oidc-config-id', oidc_config_id, '-m', 'auto', '-y']
