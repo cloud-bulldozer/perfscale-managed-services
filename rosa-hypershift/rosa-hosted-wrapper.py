@@ -140,7 +140,7 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
 
 def _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path):
     logging.info('Creating OIDC Provider')
-    oidc_gen_cmd = [rosa_cmnd, 'create', 'oidc-config', '--mode=auto', '-y', '--prefix', cluster_name_seed]
+    oidc_gen_cmd = [rosa_cmnd, 'create', 'oidc-config', '--mode=auto', '-y', '--prefix', '--managed=false', cluster_name_seed]
     logging.debug(oidc_gen_cmd)
     oidc_gen_log = open(my_path + "/" + 'oidc_config_id_gen.log', 'w')
     oidc_gen_process = subprocess.Popen(oidc_gen_cmd, stdout=oidc_gen_log, stderr=oidc_gen_log)
