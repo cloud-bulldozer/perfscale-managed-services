@@ -34,7 +34,7 @@ _delete_clusters() {
 _create_cluster() {
   log "INFO: Creating cluster $1" | tee /dev/fd/3
   # Timeout of 15 minutes for creating the cluster (3 times of normal execution)
-  timeout --foreground -k 900 900 rosa create cluster -c $1 --replicas 2 --hosted-cp --sts --mode auto -y --watch --multi-az --subnet-ids $2 --properties $3 --oidc-config-id ${OIDC_CONFIG_ID} --operator-roles-prefix ${OPERATOR_ROLES_PREFIX} --compute-machine-type m5.xlarge --version 4.12.14 || (log "ERROR: Failed to create cluster $1 after 15 minutes" && return 1)
+  timeout --foreground -k 900 900 rosa create cluster -c $1 --replicas 3 --hosted-cp --sts --mode auto -y --watch --multi-az --subnet-ids $2 --properties $3 --oidc-config-id ${OIDC_CONFIG_ID} --operator-roles-prefix ${OPERATOR_ROLES_PREFIX} --compute-machine-type m5.xlarge --version 4.12.14 || (log "ERROR: Failed to create cluster $1 after 15 minutes" && return 1)
   log "INFO: Cluster $1 created" 3>&1 1>>${LOG_FILE} | tee /dev/fd/3
 }
 

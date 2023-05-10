@@ -23,6 +23,7 @@ import uuid
 import json
 import yaml
 import random
+import math
 import re
 import requests
 import urllib
@@ -253,7 +254,7 @@ def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, 
     if terraform_init_process.returncode != 0:
         logging.error('Failed to initialize terraform on %s' % my_path + "/terraform")
         return 1
-    logging.info('Applying terraform plan command with: terraform apply for %s cluster, using %s as name seed on %s' % (cluster_count, cluster_name_seed, aws_region))
+    logging.info('Applying terraform plan command with: terraform apply for %s VPC(s), using %s as name seed on %s' % (cluster_count, cluster_name_seed, aws_region))
     for trying in range(1, retries + 1):
         logging.info('Try: %d. Starting terraform apply' % trying)
         myenv = os.environ.copy()
@@ -1163,6 +1164,12 @@ def main():
         action='store_true',
         help='If selected, one VPC will be create for each Hosted Cluster')
     parser.add_argument(
+        '--clusters-per-vpc',
+        type=int,
+        default=1,
+        choices=range(1, 11),
+        help='Number of clusters to create on each VPC. Default: 1, Max: 10')
+    parser.add_argument(
         '--must-gather-all',
         action='store_true',
         help='If selected, collect must-gather from all cluster, if not, only collect from failed clusters')
@@ -1364,6 +1371,7 @@ def main():
         oidc_config_id = _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path)
         oidc_cleanup = True
 
+    operator_roles_prefix = ""
     if args.common_operator_roles:
         installer_role_arn = _find_installer_role_arn(rosa_cmnd, my_path)
         roles_created = _gen_operator_roles(rosa_cmnd, cluster_name_seed, my_path, oidc_config_id, installer_role_arn)
@@ -1388,7 +1396,8 @@ def main():
     access_to_service_cluster = True if sc_kubeconfig_path != "" else False
 
     if args.create_vpc:
-        vpcs = _create_vpcs(terraform_cmnd, args.terraform_retry, my_path, cluster_name_seed, args.cluster_count, args.aws_region)
+        logging.info("Clusters Requested: %d. Clusters Per VPC: %d. VPCs to create: %d" % (args.cluster_count, args.clusters_per_vpc, math.ceil(args.cluster_count / args.clusters_per_vpc)))
+        vpcs = _create_vpcs(terraform_cmnd, args.terraform_retry, my_path, cluster_name_seed, math.ceil(args.cluster_count / args.clusters_per_vpc), args.aws_region)
         if not vpcs:
             logging.error("Failed to create AWS VPCs, destroying them and exiting...")
             _destroy_vpcs(terraform_cmnd, args.terraform_retry, my_path, args.aws_region, vpcs)
@@ -1444,7 +1453,7 @@ def main():
                     jobs = 0
                 vpc_info = ""
                 if args.create_vpc:
-                    vpc_info = vpcs[(loop_counter - 1)]
+                    vpc_info = vpcs[(loop_counter - 1) % len(vpcs)]
                     logging.debug("Creating cluster on VPC %s, with subnets: %s" % (vpc_info[0], vpc_info[1]))
                 try:
                     thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, oidc_config_id, args.workload_type, args.kube_burner_version, args.e2e_git_details, args.git_branch, operator_roles_prefix))
