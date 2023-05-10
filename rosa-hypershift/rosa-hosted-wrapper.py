@@ -23,18 +23,18 @@ import uuid
 import json
 import yaml
 import random
+import math
 import re
 import requests
 import urllib
 import logging
 import configparser
-from distutils import version as ver
+from packaging import version as ver
 import threading
 import concurrent.futures
 from git import Repo
 from libs import common
 from libs import parentParsers
-from random import randrange
 
 
 def set_force_terminate(signum, frame):
@@ -63,14 +63,14 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
             tags_list.append(tag['ref'].split('/')[-1].split('v')[-1])
         logging.debug('List of tags: %s' % tags_list)
         if rosa_version == 'latest':
-            version = sorted(tags_list, key=ver.StrictVersion)[-1]
+            version = sorted(tags_list, key=ver.parse)[-1]
         else:
             version = None
             for tag in tags_list:
                 if tag == rosa_version:
                     version = tag
             if version is None:
-                version = sorted(tags_list, key=ver.StrictVersion)[-1]
+                version = sorted(tags_list, key=ver.parse)[-1]
                 logging.error('Invalid ROSA release %s, downloading latest release identified as %s' % (rosa_version, version))
         logging.info('Downloading ROSA release identified as %s' % version)
         try:
@@ -107,14 +107,14 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
             tags_list.append(tag['ref'].split('/')[-1].split('v')[-1])
         logging.debug('List of tags: %s' % tags_list)
         if ocm_version == 'latest':
-            version = sorted(tags_list, key=ver.StrictVersion)[-1]
+            version = sorted(tags_list, key=ver.parse)[-1]
         else:
             version = None
             for tag in tags_list:
                 if tag == ocm_version:
                     version = tag
             if version is None:
-                version = sorted(tags_list, key=ver.StrictVersion)[-1]
+                version = sorted(tags_list, key=ver.parse)[-1]
                 logging.error('Invalid OCM release %s, downloading latest release identified as %s' % (ocm_version, version))
         logging.info('Downloading OCM release identified as %s' % version)
         try:
@@ -140,7 +140,7 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
 
 def _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path):
     logging.info('Creating OIDC Provider')
-    oidc_gen_cmd = [rosa_cmnd, 'create', 'oidc-config', '--mode=auto', '-y', '--prefix', cluster_name_seed]
+    oidc_gen_cmd = [rosa_cmnd, 'create', 'oidc-config', '--mode=auto', '--managed=false', '--prefix', cluster_name_seed, '-y']
     logging.debug(oidc_gen_cmd)
     oidc_gen_log = open(my_path + "/" + 'oidc_config_id_gen.log', 'w')
     oidc_gen_process = subprocess.Popen(oidc_gen_cmd, stdout=oidc_gen_log, stderr=oidc_gen_log)
@@ -183,6 +183,55 @@ def _verify_oidc_config_id(oidc_config_id, rosa_cmnd, my_path):
     return False
 
 
+def _gen_operator_roles(rosa_cmnd, cluster_name_seed, my_path, oidc_id, installer_role_arn):
+    logging.info("Creating Operator Roles")
+    roles_cmd = [rosa_cmnd, 'create', 'operator-roles', '--prefix', cluster_name_seed, '-m', 'auto', '-y', '--hosted-cp', '--oidc-config-id', oidc_id, '--installer-role-arn', installer_role_arn]
+    logging.debug(roles_cmd)
+    roles_log = open(my_path + "/" + 'rosa_create_operator_roles.log', 'w')
+    roles_process = subprocess.Popen(roles_cmd, stdout=roles_log, stderr=roles_log)
+    roles_stdout, roles_stderr = roles_process.communicate()
+    if roles_process.returncode != 0:
+        logging.error('Unable to create operator roles. Please check logfile %s' % my_path + "/" + 'rosa_create_operator_roles.log')
+        exit(1)
+    else:
+        return True
+
+
+def _delete_operator_roles(rosa_cmnd, cluster_name_seed, my_path):
+    logging.info("Deleting Operator Roles with prefix: %s" % cluster_name_seed)
+    roles_cmd = [rosa_cmnd, 'delete', 'operator-roles', '--prefix', cluster_name_seed, '-m', 'auto', '-y']
+    logging.debug(roles_cmd)
+    roles_log = open(my_path + "/" + 'rosa_delete_operator_roles.log', 'w')
+    roles_process = subprocess.Popen(roles_cmd, stdout=roles_log, stderr=roles_log)
+    roles_stdout, roles_stderr = roles_process.communicate()
+    if roles_process.returncode != 0:
+        logging.error('Unable to delete operator roles. Please manually delete them using `rosa delete operator-roles --prefix %s -m auto -y and check logfile %s for errors' % (cluster_name_seed, my_path + "/" + 'rosa_create_operator_roles.log'))
+        return False
+    else:
+        return True
+
+
+def _find_installer_role_arn(rosa_cmnd, my_path):
+    logging.info("Find latest Installer Role ARN")
+    roles_cmd = [rosa_cmnd, 'list', 'account-roles', '-o', 'json']
+    logging.debug(roles_cmd)
+    roles_process = subprocess.Popen(roles_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    roles_stdout, roles_stderr = roles_process.communicate()
+    if roles_process.returncode != 0:
+        logging.error('Unable to list account Roles. Please check output result of `rosa list account-roles command`')
+        logging.error(roles_stdout)
+        logging.error(roles_stderr)
+        exit(1)
+    else:
+        installer_role_version = ver.parse("0")
+        installer_role_arn = None
+        for role in json.loads(roles_stdout.decode("utf-8")):
+            if role['RoleType'] == "Installer" and ver.parse(role['Version']) > installer_role_version:
+                installer_role_arn = role['RoleARN']
+                installer_role_version = ver.parse(role['Version'])
+        return installer_role_arn
+
+
 def _verify_terraform(terraform_cmnd, my_path):
     logging.info('Testing terraform command with: terraform -version')
     terraform_cmd = [terraform_cmnd, "-version"]
@@ -205,7 +254,7 @@ def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, 
     if terraform_init_process.returncode != 0:
         logging.error('Failed to initialize terraform on %s' % my_path + "/terraform")
         return 1
-    logging.info('Applying terraform plan command with: terraform apply for %s cluster, using %s as name seed on %s' % (cluster_count, cluster_name_seed, aws_region))
+    logging.info('Applying terraform plan command with: terraform apply for %s VPC(s), using %s as name seed on %s' % (cluster_count, cluster_name_seed, aws_region))
     for trying in range(1, retries + 1):
         logging.info('Try: %d. Starting terraform apply' % trying)
         myenv = os.environ.copy()
@@ -570,14 +619,14 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
     return 0
 
 
-def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name, oidc_config_id, workload_type, kube_burner_version, e2e_git_details, git_branch, worker_label):
+def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name, oidc_config_id, workload_type, kube_burner_version, e2e_git_details, git_branch, operator_roles_prefix, worker_label):
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
     os.mkdir(cluster_path)
     logging.debug('Attempting cluster installation')
     logging.debug('Output directory set to %s' % cluster_path)
     cluster_name = cluster_name_seed + "-" + str(my_inc).zfill(4)
-    cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, "--replicas", str(worker_nodes), "--hosted-cp", "--multi-az", "--sts", "--mode", "auto", "-y", "--output", "json", "--operator-roles-prefix", cluster_name, "--oidc-config-id", oidc_config_id]
+    cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, "--replicas", str(worker_nodes), "--hosted-cp", "--sts", "--mode", "auto", "-y", "--output", "json", "--oidc-config-id", oidc_config_id]
     if create_vpc:
         cluster_cmd.append("--subnet-ids")
         cluster_cmd.append(vpc_info[1])
@@ -587,62 +636,77 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
     if args.wildcard_options:
         for param in args.wildcard_options.split():
             cluster_cmd.append(param)
+    if operator_roles_prefix:
+        cluster_cmd.append("--operator-roles-prefix")
+        cluster_cmd.append(cluster_name_seed)
     logging.debug(cluster_cmd)
     installation_log = open(cluster_path + "/" + 'installation.log', 'w')
     cluster_start_time = int(time.time())
-    process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
-    logging.info('Started cluster %d with %d workers' % (my_inc, worker_nodes))
-    stdout, stderr = process.communicate()
+    logging.info("Trying to install %s cluster with %d workers up to 5 times" % (cluster_name, worker_nodes))
     metadata = {}
-    metadata['cluster_name'] = cluster_name
-    if process.returncode == 0:
-        metadata = get_metadata(cluster_name, rosa_cmnd)
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            sc_namespace = executor.submit(_namespace_wait, sc_kubeconfig, metadata['cluster_id'], cluster_name, "Service") if sc_kubeconfig != "" else 0
-            mc_namespace = executor.submit(_namespace_wait, mgmt_kubeconfig, metadata['cluster_id'], cluster_name, "Management") if mgmt_kubeconfig != "" else 0
-            preflight_ch = executor.submit(_preflight_wait, rosa_cmnd, metadata['cluster_id'], cluster_name)
-            sc_namespace_timing = sc_namespace.result()
-            mc_namespace_timing = mc_namespace.result()
-            preflight_checks = preflight_ch.result()
-        watch_cmd = [rosa_cmnd, "logs", "install", "-c", cluster_name, "--watch"]
-        logging.debug(watch_cmd)
-        watch_process = subprocess.Popen(watch_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
-        watch_stdout, watch_stderr = watch_process.communicate()
-        cluster_end_time = int(time.time())
-        metadata = get_metadata(cluster_name, rosa_cmnd)
-        return_data = _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, cluster_path)
-        kubeconfig = return_data['kubeconfig'] if 'kubeconfig' in return_data else ""
-        metadata['cluster-admin-create'] = return_data['cluster-admin-create'] if 'cluster-admin-create' in return_data else 0
-        metadata['cluster-admin-login'] = return_data['cluster-admin-login'] if 'cluster-admin-login' in return_data else 0
-        metadata['cluster-oc-adm'] = return_data['cluster-oc-adm'] if 'cluster-oc-adm' in return_data else 0
-        metadata['mgmt_namespace'] = mc_namespace_timing
-        metadata['sc_namespace'] = sc_namespace_timing
-        metadata['preflight_checks'] = preflight_checks
-        if kubeconfig == "":
-            logging.error("Failed to download kubeconfig file. Disabling wait for workers and e2e-benchmarking execution on %s" % cluster_name)
-            wait_time = 0
-            cluster_load = False
-            metadata['status'] = "Ready. Not Access"
-        if wait_time != 0:
-            logging.info("Waiting %d minutes for %d workers to be ready on %s" % (wait_time, worker_nodes, cluster_name))
-            workers_ready = _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name)
-            cluster_workers_ready = int(time.time())
-            logging.info("%d workers ready after %d seconds on %s" % (workers_ready, cluster_workers_ready - cluster_start_time, cluster_name))
-            if cluster_load and workers_ready != worker_nodes:
-                logging.error("Insufficient number of workers (%d). Expected: %d. Disabling e2e-benchmarking execution on %s" % (workers_ready, worker_nodes, cluster_name))
+    trying = 0
+    while trying <= 5:
+        process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
+        stdout, stderr = process.communicate()
+        trying += 1
+        if process.returncode != 0:
+            metadata['install_try'] = trying
+            logging.debug(stdout)
+            logging.debug(stderr)
+            if trying <= 5:
+                logging.warning("Try: %d/5. Cluster %s installation failed, retrying in 15 seconds" % (trying, cluster_name))
+                time.sleep(15)
+            else:
+                cluster_end_time = int(time.time())
+                metadata['status'] = "Not Installed"
                 cluster_load = False
-                metadata['status'] = "Ready. No Workers"
-            metadata['workers_ready'] = cluster_workers_ready - cluster_start_time if workers_ready == worker_nodes else ""
+                logging.error("%s Cluster installation failed after 5 retries" % cluster_name)
+                logging.debug(stdout)
         else:
-            logging.info("Cluster %s ready. Not waiting for workers to be ready. Setting workers_ready to 0 on ES Document" % cluster_name)
-            metadata['workers_ready'] = 0
-            cluster_load = False
-    else:
-        cluster_end_time = int(time.time())
-        logging.error("Failed to install cluster %s" % cluster_name)
-        logging.debug(stdout)
-        logging.debug(stderr)
-        metadata['status'] = "Not Ready"
+            logging.info("Cluster %s installation started on the %d try" % (cluster_name, trying))
+            metadata = get_metadata(cluster_name, rosa_cmnd)
+            metadata['install_try'] = trying
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                sc_namespace = executor.submit(_namespace_wait, sc_kubeconfig, metadata['cluster_id'], cluster_name, "Service") if sc_kubeconfig != "" else 0
+                mc_namespace = executor.submit(_namespace_wait, mgmt_kubeconfig, metadata['cluster_id'], cluster_name, "Management") if mgmt_kubeconfig != "" else 0
+                preflight_ch = executor.submit(_preflight_wait, rosa_cmnd, metadata['cluster_id'], cluster_name)
+                sc_namespace_timing = sc_namespace.result()
+                mc_namespace_timing = mc_namespace.result()
+                preflight_checks = preflight_ch.result()
+            watch_cmd = [rosa_cmnd, "logs", "install", "-c", cluster_name, "--watch"]
+            logging.debug(watch_cmd)
+            watch_process = subprocess.Popen(watch_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
+            watch_stdout, watch_stderr = watch_process.communicate()
+            cluster_end_time = int(time.time())
+            metadata = get_metadata(cluster_name, rosa_cmnd)
+            return_data = _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, cluster_path)
+            kubeconfig = return_data['kubeconfig'] if 'kubeconfig' in return_data else ""
+            metadata['cluster-admin-create'] = return_data['cluster-admin-create'] if 'cluster-admin-create' in return_data else 0
+            metadata['cluster-admin-login'] = return_data['cluster-admin-login'] if 'cluster-admin-login' in return_data else 0
+            metadata['cluster-oc-adm'] = return_data['cluster-oc-adm'] if 'cluster-oc-adm' in return_data else 0
+            metadata['mgmt_namespace'] = mc_namespace_timing
+            metadata['sc_namespace'] = sc_namespace_timing
+            metadata['preflight_checks'] = preflight_checks
+            if kubeconfig == "":
+                logging.error("Failed to download kubeconfig file. Disabling wait for workers and e2e-benchmarking execution on %s" % cluster_name)
+                wait_time = 0
+                cluster_load = False
+                metadata['status'] = "Ready. Not Access"
+            if wait_time != 0:
+                logging.info("Waiting %d minutes for %d workers to be ready on %s" % (wait_time, worker_nodes, cluster_name))
+                workers_ready = _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name)
+                cluster_workers_ready = int(time.time())
+                logging.info("%d workers ready after %d seconds on %s" % (workers_ready, cluster_workers_ready - cluster_start_time, cluster_name))
+                if cluster_load and workers_ready != worker_nodes:
+                    logging.error("Insufficient number of workers (%d). Expected: %d. Disabling e2e-benchmarking execution on %s" % (workers_ready, worker_nodes, cluster_name))
+                    cluster_load = False
+                    metadata['status'] = "Ready. No Workers"
+                metadata['workers_ready'] = cluster_workers_ready - cluster_start_time if workers_ready == worker_nodes else ""
+            else:
+                logging.info("Cluster %s ready. Not waiting for workers to be ready. Setting workers_ready to 0 on ES Document" % cluster_name)
+                metadata['workers_ready'] = 0
+                cluster_load = False
+            break
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
     metadata['duration'] = cluster_end_time - cluster_start_time
     metadata['job_iterations'] = str(job_iterations) if cluster_load else 0
@@ -651,6 +715,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
     metadata['uuid'] = my_uuid
     metadata['operation'] = "install"
     metadata['install_method'] = "rosa"
+    metadata['cluster_name'] = cluster_name
     try:
         with open(cluster_path + "/metadata_install.json", "w") as metadata_file:
             json.dump(metadata, metadata_file)
@@ -1022,7 +1087,6 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
         metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
         es_ignored_metadata = ""
         common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
-    
 
 
 def main():
@@ -1143,6 +1207,12 @@ def main():
         action='store_true',
         help='If selected, one VPC will be create for each Hosted Cluster')
     parser.add_argument(
+        '--clusters-per-vpc',
+        type=int,
+        default=1,
+        choices=range(1, 11),
+        help='Number of clusters to create on each VPC. Default: 1, Max: 10')
+    parser.add_argument(
         '--must-gather-all',
         action='store_true',
         help='If selected, collect must-gather from all cluster, if not, only collect from failed clusters')
@@ -1151,29 +1221,29 @@ def main():
         type=str,
         help='Pass a custom oidc config id to use for the oidc provider. NOTE: this is not deleted on cleanup')
     parser.add_argument(
+        '--common-operator-roles',
+        action='store_true',
+        help='Create unique operator roles and use them on all the cluster installations')
+    parser.add_argument(
         '--workload-type',
         type=str,
         help="Pass the workload type: cluster-density, cluster-density-v2, cluster-density-ms",
-        default="cluster-density-ms"
-    )
+        default="cluster-density-ms")
     parser.add_argument(
         '--kube-burner-version',
         type=str,
-        help= 'Kube-burner version, if none provided defaults to 1.5 ',
-        default='1.5'
-    )
+        help='Kube-burner version, if none provided defaults to 1.5 ',
+        default='1.5')
     parser.add_argument(
         '--e2e-git-details',
         type=str,
-        help= 'Supply the e2e-benchmarking Git URL',
-        default="https://github.com/cloud-bulldozer/e2e-benchmarking.git"
-    )
+        help='Supply the e2e-benchmarking Git URL',
+        default="https://github.com/cloud-bulldozer/e2e-benchmarking.git")
     parser.add_argument(
         '--git-branch',
         type=str,
         help='Specify a desired branch of the corresponding git',
-        default='master'
-    )    
+        default='master')    
     parser.add_argument(
         '--worker-labelling',
         type=str,
@@ -1349,6 +1419,12 @@ def main():
         oidc_config_id = _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path)
         oidc_cleanup = True
 
+    operator_roles_prefix = ""
+    if args.common_operator_roles:
+        installer_role_arn = _find_installer_role_arn(rosa_cmnd, my_path)
+        roles_created = _gen_operator_roles(rosa_cmnd, cluster_name_seed, my_path, oidc_config_id, installer_role_arn)
+        operator_roles_prefix = cluster_name_seed if roles_created else ""
+
     # Get connected to management cluster
     logging.info("Getting information of %s management cluster on %s organization" % (args.mgmt_cluster, args.mgmt_org_id))
     mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, args.mgmt_cluster, args.mgmt_org_id, args.aws_region, es, args.es_index, args.es_index_retry, my_uuid, args.cluster_count)
@@ -1368,7 +1444,8 @@ def main():
     access_to_service_cluster = True if sc_kubeconfig_path != "" else False
 
     if args.create_vpc:
-        vpcs = _create_vpcs(terraform_cmnd, args.terraform_retry, my_path, cluster_name_seed, args.cluster_count, args.aws_region)
+        logging.info("Clusters Requested: %d. Clusters Per VPC: %d. VPCs to create: %d" % (args.cluster_count, args.clusters_per_vpc, math.ceil(args.cluster_count / args.clusters_per_vpc)))
+        vpcs = _create_vpcs(terraform_cmnd, args.terraform_retry, my_path, cluster_name_seed, math.ceil(args.cluster_count / args.clusters_per_vpc), args.aws_region)
         if not vpcs:
             logging.error("Failed to create AWS VPCs, destroying them and exiting...")
             _destroy_vpcs(terraform_cmnd, args.terraform_retry, my_path, args.aws_region, vpcs)
@@ -1424,10 +1501,10 @@ def main():
                     jobs = 0
                 vpc_info = ""
                 if args.create_vpc:
-                    vpc_info = vpcs[(loop_counter - 1)]
+                    vpc_info = vpcs[(loop_counter - 1) % len(vpcs)]
                     logging.debug("Creating cluster on VPC %s, with subnets: %s" % (vpc_info[0], vpc_info[1]))
                 try:
-                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, oidc_config_id, args.workload_type, args.kube_burner_version, args.e2e_git_details, args.git_branch, args.worker_label))
+                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, oidc_config_id, args.workload_type, args.kube_burner_version, args.e2e_git_details, args.git_branch, operator_roles_prefix, args.worker_label))
                 except Exception as err:
                     logging.error(err)
                 cluster_thread_list.append(thread)
@@ -1502,6 +1579,8 @@ def main():
                     continue
                 else:
                     raise
+
+        deleted_roles = _delete_operator_roles(rosa_cmnd, cluster_name_seed, my_path) if args.common_operator_roles else None
 
         if oidc_cleanup:
             delete_oidc_cmd = [rosa_cmnd, 'delete', 'oidc-config', '--oidc-config-id', oidc_config_id, '-m', 'auto', '-y']

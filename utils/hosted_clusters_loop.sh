@@ -8,6 +8,8 @@ NUMBER_OF_CLUSTERS="${NUMBER_OF_CLUSTERS:-3}"
 CLUSTER_NAME_SEED="${CLUSTER_NAME_SEED:-chaos}"
 AWS_SUBNETS="${AWS_SUBNETS:-subnet-xxxxxxx,subnet-xxxxxx,subnet-xxxxxx,subnet-xxxxxx,subnet-xxxxxx,subnet-xxxxxx}"
 PROVISION_SHARD="${PROVISION_SHARD:-provision_shard_id:xxxxxx}"
+OIDC_CONFIG_ID="${OIDC_CONFIG_ID:-xxxxxxxxxxxx}"
+OPERATOR_ROLES_PREFIX="${OPERATOR_ROLES_PREFIX:loop-role}"
 export AWS_REGION="${AWS_REGION:-us-east-2}"
 ###
 
@@ -32,16 +34,16 @@ _delete_clusters() {
 _create_cluster() {
   log "INFO: Creating cluster $1" | tee /dev/fd/3
   # Timeout of 15 minutes for creating the cluster (3 times of normal execution)
-  timeout --foreground -k 900 900 rosa create cluster -c $1 --replicas 2 --hosted-cp --sts --mode auto -y --watch --multi-az --subnet-ids $2 --properties $3 --compute-machine-type m5.xlarge --version 4.12.1 || (log "ERROR: Failed to create cluster $1 after 15 minutes" && return 1)
+  timeout --foreground -k 900 900 rosa create cluster -c $1 --replicas 3 --hosted-cp --sts --mode auto -y --watch --multi-az --subnet-ids $2 --properties $3 --oidc-config-id ${OIDC_CONFIG_ID} --operator-roles-prefix ${OPERATOR_ROLES_PREFIX} --compute-machine-type m5.xlarge --version 4.12.14 || (log "ERROR: Failed to create cluster $1 after 15 minutes" && return 1)
   log "INFO: Cluster $1 created" 3>&1 1>>${LOG_FILE} | tee /dev/fd/3
 }
 
 _delete_cluster(){
   # Timeout of 60 minutes for cleaning the cluster (3 times of normal execution)
   timeout --foreground -k 3600 3600 rosa delete cluster -c $1 -y --watch|| (log "ERROR: Failed to delete cluster $1 after 30 minutes" && return 1)
-  # Timeout of 5 minutes for Roles and OIDC
-  timeout --foreground -k 300 300 rosa delete operator-roles -c $1 -m auto -y || (log "ERROR: Failed to delete operator roles of cluster $1 after 5 minutes" && return 1)
-  timeout --foreground -k 300 300 rosa delete oidc-provider -c $1 -m auto -y || (log "ERROR: Failed to delete OIDC providers of cluster $1 after 5 minutes" && return 1)
+#  # Timeout of 5 minutes for Roles and OIDC
+#  timeout --foreground -k 300 300 rosa delete operator-roles -c $1 -m auto -y || (log "ERROR: Failed to delete operator roles of cluster $1 after 5 minutes" && return 1)
+#  timeout --foreground -k 300 300 rosa delete oidc-provider -c $1 -m auto -y || (log "ERROR: Failed to delete OIDC providers of cluster $1 after 5 minutes" && return 1)
 }
 
 CLUSTER_INDEX=0
