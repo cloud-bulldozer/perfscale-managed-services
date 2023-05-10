@@ -642,59 +642,71 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
     logging.debug(cluster_cmd)
     installation_log = open(cluster_path + "/" + 'installation.log', 'w')
     cluster_start_time = int(time.time())
-    process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
-    logging.info('Started cluster %d with %d workers' % (my_inc, worker_nodes))
-    stdout, stderr = process.communicate()
+    logging.info("Trying to install %s cluster with %d workers up to 5 times" % (cluster_name, worker_nodes))
     metadata = {}
-    metadata['cluster_name'] = cluster_name
-    if process.returncode == 0:
-        metadata = get_metadata(cluster_name, rosa_cmnd)
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            sc_namespace = executor.submit(_namespace_wait, sc_kubeconfig, metadata['cluster_id'], cluster_name, "Service") if sc_kubeconfig != "" else 0
-            mc_namespace = executor.submit(_namespace_wait, mgmt_kubeconfig, metadata['cluster_id'], cluster_name, "Management") if mgmt_kubeconfig != "" else 0
-            preflight_ch = executor.submit(_preflight_wait, rosa_cmnd, metadata['cluster_id'], cluster_name)
-            sc_namespace_timing = sc_namespace.result()
-            mc_namespace_timing = mc_namespace.result()
-            preflight_checks = preflight_ch.result()
-        watch_cmd = [rosa_cmnd, "logs", "install", "-c", cluster_name, "--watch"]
-        logging.debug(watch_cmd)
-        watch_process = subprocess.Popen(watch_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
-        watch_stdout, watch_stderr = watch_process.communicate()
-        cluster_end_time = int(time.time())
-        metadata = get_metadata(cluster_name, rosa_cmnd)
-        return_data = _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, cluster_path)
-        kubeconfig = return_data['kubeconfig'] if 'kubeconfig' in return_data else ""
-        metadata['cluster-admin-create'] = return_data['cluster-admin-create'] if 'cluster-admin-create' in return_data else 0
-        metadata['cluster-admin-login'] = return_data['cluster-admin-login'] if 'cluster-admin-login' in return_data else 0
-        metadata['cluster-oc-adm'] = return_data['cluster-oc-adm'] if 'cluster-oc-adm' in return_data else 0
-        metadata['mgmt_namespace'] = mc_namespace_timing
-        metadata['sc_namespace'] = sc_namespace_timing
-        metadata['preflight_checks'] = preflight_checks
-        if kubeconfig == "":
-            logging.error("Failed to download kubeconfig file. Disabling wait for workers and e2e-benchmarking execution on %s" % cluster_name)
-            wait_time = 0
-            cluster_load = False
-            metadata['status'] = "Ready. Not Access"
-        if wait_time != 0:
-            logging.info("Waiting %d minutes for %d workers to be ready on %s" % (wait_time, worker_nodes, cluster_name))
-            workers_ready = _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name)
-            cluster_workers_ready = int(time.time())
-            logging.info("%d workers ready after %d seconds on %s" % (workers_ready, cluster_workers_ready - cluster_start_time, cluster_name))
-            if cluster_load and workers_ready != worker_nodes:
-                logging.error("Insufficient number of workers (%d). Expected: %d. Disabling e2e-benchmarking execution on %s" % (workers_ready, worker_nodes, cluster_name))
+    trying = 0
+    while trying <= 5:
+        process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
+        stdout, stderr = process.communicate()
+        trying += 1
+        if process.returncode != 0:
+            metadata['install_try'] = trying
+            logging.debug(stdout)
+            logging.debug(stderr)
+            if trying <= 5:
+                logging.warning("Try: %d/5. Cluster %s installation failed, retrying in 15 seconds" % (trying, cluster_name))
+                time.sleep(15)
+            else:
+                cluster_end_time = int(time.time())
+                metadata['status'] = "Not Installed"
                 cluster_load = False
-                metadata['status'] = "Ready. No Workers"
-            metadata['workers_ready'] = cluster_workers_ready - cluster_start_time if workers_ready == worker_nodes else ""
+                logging.error("%s Cluster installation failed after 5 retries" % cluster_name)
+                logging.debug(stdout)
         else:
-            logging.info("Cluster %s ready. Not waiting for workers to be ready. Setting workers_ready to 0 on ES Document" % cluster_name)
-            metadata['workers_ready'] = 0
-            cluster_load = False
-    else:
-        cluster_end_time = int(time.time())
-        logging.error("Failed to install cluster %s" % cluster_name)
-        logging.debug(stdout)
-        logging.debug(stderr)
-        metadata['status'] = "Not Ready"
+            logging.info("Cluster %s installation started on the %d try" % (cluster_name, trying))
+            metadata = get_metadata(cluster_name, rosa_cmnd)
+            metadata['install_try'] = trying
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                sc_namespace = executor.submit(_namespace_wait, sc_kubeconfig, metadata['cluster_id'], cluster_name, "Service") if sc_kubeconfig != "" else 0
+                mc_namespace = executor.submit(_namespace_wait, mgmt_kubeconfig, metadata['cluster_id'], cluster_name, "Management") if mgmt_kubeconfig != "" else 0
+                preflight_ch = executor.submit(_preflight_wait, rosa_cmnd, metadata['cluster_id'], cluster_name)
+                sc_namespace_timing = sc_namespace.result()
+                mc_namespace_timing = mc_namespace.result()
+                preflight_checks = preflight_ch.result()
+            watch_cmd = [rosa_cmnd, "logs", "install", "-c", cluster_name, "--watch"]
+            logging.debug(watch_cmd)
+            watch_process = subprocess.Popen(watch_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
+            watch_stdout, watch_stderr = watch_process.communicate()
+            cluster_end_time = int(time.time())
+            metadata = get_metadata(cluster_name, rosa_cmnd)
+            return_data = _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, cluster_path)
+            kubeconfig = return_data['kubeconfig'] if 'kubeconfig' in return_data else ""
+            metadata['cluster-admin-create'] = return_data['cluster-admin-create'] if 'cluster-admin-create' in return_data else 0
+            metadata['cluster-admin-login'] = return_data['cluster-admin-login'] if 'cluster-admin-login' in return_data else 0
+            metadata['cluster-oc-adm'] = return_data['cluster-oc-adm'] if 'cluster-oc-adm' in return_data else 0
+            metadata['mgmt_namespace'] = mc_namespace_timing
+            metadata['sc_namespace'] = sc_namespace_timing
+            metadata['preflight_checks'] = preflight_checks
+            if kubeconfig == "":
+                logging.error("Failed to download kubeconfig file. Disabling wait for workers and e2e-benchmarking execution on %s" % cluster_name)
+                wait_time = 0
+                cluster_load = False
+                metadata['status'] = "Ready. Not Access"
+            if wait_time != 0:
+                logging.info("Waiting %d minutes for %d workers to be ready on %s" % (wait_time, worker_nodes, cluster_name))
+                workers_ready = _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name)
+                cluster_workers_ready = int(time.time())
+                logging.info("%d workers ready after %d seconds on %s" % (workers_ready, cluster_workers_ready - cluster_start_time, cluster_name))
+                if cluster_load and workers_ready != worker_nodes:
+                    logging.error("Insufficient number of workers (%d). Expected: %d. Disabling e2e-benchmarking execution on %s" % (workers_ready, worker_nodes, cluster_name))
+                    cluster_load = False
+                    metadata['status'] = "Ready. No Workers"
+                metadata['workers_ready'] = cluster_workers_ready - cluster_start_time if workers_ready == worker_nodes else ""
+            else:
+                logging.info("Cluster %s ready. Not waiting for workers to be ready. Setting workers_ready to 0 on ES Document" % cluster_name)
+                metadata['workers_ready'] = 0
+                cluster_load = False
+            break
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
     metadata['duration'] = cluster_end_time - cluster_start_time
     metadata['job_iterations'] = str(job_iterations) if cluster_load else 0
@@ -703,6 +715,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
     metadata['uuid'] = my_uuid
     metadata['operation'] = "install"
     metadata['install_method'] = "rosa"
+    metadata['cluster_name'] = cluster_name
     try:
         with open(cluster_path + "/metadata_install.json", "w") as metadata_file:
             json.dump(metadata, metadata_file)
