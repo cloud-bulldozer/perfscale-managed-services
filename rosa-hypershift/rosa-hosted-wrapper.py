@@ -851,18 +851,18 @@ def _run_on_labels(my_path, worker_label, workload_type):
     default_label = "worker"
     logging.info('Extracting the %s workload files from kube-burner' % workload_type)
     os.chdir(my_path + '/e2e-benchmarking/workloads/kube-burner-ocp-wrapper')
-    extract_command = ["kube-burner ", "ocp ", workload_type, " --extract"]
+    extract_command = ["kube-burner", "ocp", workload_type, "--extract"]
     logging.debug(extract_command)
     extract_process = subprocess.Popen(extract_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-    extract_stdout, extract_stderr = extract_process.communicate()
+    stdout, stderr = extract_process.communicate()
 
     if extract_process.returncode != 0:
         logging.error('unable to execute `%s`' % extract_command)
-        logging.error(extract_stderr)
+        logging.error(stderr)
         exit(1)
     else:
         logging.info('`%s` execution OK' % extract_command)
-        logging.debug(extract_stdout)
+        logging.debug(stdout)
 
     logging.info('Search and replace the label %s' % worker_label)    
     for root, dirs, filename in os.walk('.'):
