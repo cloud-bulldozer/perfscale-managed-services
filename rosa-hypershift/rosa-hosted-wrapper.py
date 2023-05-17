@@ -183,6 +183,65 @@ def _verify_oidc_config_id(oidc_config_id, rosa_cmnd, my_path):
     return False
 
 
+def _verify_provision_shard(ocm_cmnd, shard_id):
+    logging.info('Verifing Shard ID: %s' % shard_id)
+    ocm_command = [ocm_cmnd, "get", "/api/clusters_mgmt/v1/provision_shards/" + shard_id]
+    logging.debug(ocm_command)
+    ocm_process = subprocess.Popen(ocm_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    ocm_stdout, ocm_stderr = ocm_process.communicate()
+    if ocm_process.returncode != 0:
+        logging.error(ocm_stdout.strip().decode("utf-8"))
+        logging.error(ocm_stderr.strip().decode("utf-8"))
+        logging.error('%s unable to execute. Exiting...' % ocm_command)
+        exit(1)
+    else:
+        if json.loads(ocm_stdout.decode("utf-8")).get('hypershift_config', {}).get('server', {}) and json.loads(ocm_stdout.decode("utf-8")).get('status', {}) in ('ready', 'maintenance'):
+            # hypershift_config.server is the service cluster, like https: // api.hs-sc-0vfs0cl5g.wqrn.s1.devshift.org: 6443. split('.')[1] will return hs-sc-0vfs0cl5g
+            logging.info("Identified Service Cluster %s for Shard ID %s" % (json.loads(ocm_stdout.decode("utf-8"))['hypershift_config']['server'].split('.')[1], shard_id))
+            return json.loads(ocm_stdout.decode("utf-8"))['hypershift_config']['server'].split('.')[1]
+        else:
+            logging.error(ocm_stdout.strip().decode("utf-8"))
+            logging.error(ocm_stderr.strip().decode("utf-8"))
+            logging.error('Invalid Provision Shard %s. Exiting...' % shard_id)
+            exit(1)
+
+
+def _get_mgmt_cluster(sc_kubeconfig, cluster_id, cluster_name):
+    starting_time = datetime.datetime.utcnow().timestamp()
+    logging.info('Getting Management Cluster assigned for %s' % cluster_name)
+    myenv = os.environ.copy()
+    myenv["KUBECONFIG"] = sc_kubeconfig
+    oc_cmnd = ["oc", "get", "managedclusters", cluster_id, "-o", "json"]
+    logging.debug(oc_cmnd)
+    logging.info("Waiting 15 minutes until %s for Management Cluster to be assigned to Hosted Cluster %s" % (cluster_name, datetime.datetime.fromtimestamp(starting_time + 15 * 60)))
+    while datetime.datetime.utcnow().timestamp() < starting_time + 15 * 60:
+        oc_process = subprocess.Popen(oc_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=myenv)
+        oc_stdout, oc_stderr = oc_process.communicate()
+        if oc_process.returncode != 0:
+            logging.error(oc_stdout.strip().decode("utf-8"))
+            logging.error(oc_stderr.strip().decode("utf-8"))
+            logging.error('%s unable to execute. Retrying in 5 seconds until %s' % (oc_cmnd, datetime.datetime.fromtimestamp(starting_time + 15 * 60)))
+            time.sleep(5)
+        else:
+            try:
+                hostedcluster_json = json.loads(oc_stdout)
+            except Exception as err:
+                logging.warning(oc_stdout)
+                logging.warning(oc_stderr)
+                logging.warning(err)
+                logging.warning("Failed to get the hosted cluster output for %s Cluster. Retrying in 5 seconds until %s" % (cluster_name, datetime.datetime.fromtimestamp(starting_time + 15 * 60)))
+                time.sleep(5)
+                continue
+            if hostedcluster_json.get('metadata', {}).get('labels', {}).get('api.openshift.com/management-cluster'):
+
+                return hostedcluster_json['metadata']['labels']['api.openshift.com/management-cluster']
+            else:
+                logging.warning("Failed to get the Management Cluster assigned for Hosted Cluster %s. Retrying in 5 seconds until %s" % (cluster_name, datetime.datetime.fromtimestamp(starting_time + 15 * 60)))
+                time.sleep(5)
+    logging.error('No Management Cluster assigned to %s after 15 minutes' % cluster_name)
+    return 1
+
+
 def _gen_operator_roles(rosa_cmnd, cluster_name_seed, my_path, oidc_id, installer_role_arn):
     logging.info("Creating Operator Roles")
     roles_cmd = [rosa_cmnd, 'create', 'operator-roles', '--prefix', cluster_name_seed, '-m', 'auto', '-y', '--hosted-cp', '--oidc-config-id', oidc_id, '--installer-role-arn', installer_role_arn]
@@ -379,39 +438,9 @@ def _delete_security_groups(aws_region, my_path, vpc_id):
         return 1
 
 
-def _get_provision_shard(ocm_cmnd, cluster_name, aws_region):
-    logging.info('Searching for Provision Shard of Management Cluster %s installed on %s AWS region' % (cluster_name, aws_region))
-    ocm_command = [ocm_cmnd, "get", "/api/clusters_mgmt/v1/provision_shards?search=region.id+is+%27" + aws_region + "%27+and+management_cluster+is+%27" + cluster_name + "%27"]
-    logging.debug(ocm_command)
-    ocm_process = subprocess.Popen(ocm_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    ocm_stdout, ocm_stderr = ocm_process.communicate()
-    if ocm_process.returncode != 0:
-        logging.error('%s unable to execute ' % ocm_command)
-        logging.error(ocm_stderr.strip().decode("utf-8"))
-    else:
-        if int(json.loads(ocm_stdout.decode("utf-8"))['total']) > 0:
-            shard_list = []
-            for shard in json.loads(ocm_stdout.decode("utf-8"))['items']:
-                if 'status' in shard and shard['status'] in ['active', 'maintenance']:
-                    shard_list.append(shard['id'])
-            if len(shard_list) == 0:
-                logging.error('No active provision Shard found for  Management Cluster %s installed on %s AWS region' % (cluster_name, aws_region))
-                exit(1)
-            elif len(shard_list) == 1:
-                logging.info('Using %s Provision Shard for Management Cluster %s installed on %s AWS region' % (shard_list[0], cluster_name, aws_region))
-                return shard_list[0]
-            else:
-                logging.info('Detected multiples Provision Shards for Management Cluster %s installed on %s AWS region, using %s' % (cluster_name, aws_region, shard_list[0]))
-                logging.debug(shard_list)
-                return shard_list[0]
-        else:
-            logging.error('Provision Shard not found for  Management Cluster %s installed on %s AWS region' % (cluster_name, aws_region))
-            exit(1)
-
-
-def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster, org_id, aws_region, es, index, index_retry, uuid, hostedclusters):
-    logging.info('Searching for Management/Service Clusters on Org %s installed on %s AWS region' % (org_id, aws_region))
-    ocm_command = [ocm_cmnd, "get", "/api/clusters_mgmt/v1/clusters?search=organization.id+is+%27" + org_id + "%27+and+region.id+is+%27" + aws_region + "%27"]
+def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster, es, index, index_retry, uuid):
+    logging.info('Searching for Management/Service Clusters with name %s' % mgmt_cluster)
+    ocm_command = [ocm_cmnd, "get", "/api/clusters_mgmt/v1/clusters?search=name+is+%27" + mgmt_cluster + "%27"]
     logging.debug(ocm_command)
     ocm_process = subprocess.Popen(ocm_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     ocm_stdout, ocm_stderr = ocm_process.communicate()
@@ -438,13 +467,12 @@ def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster, org_id, aws_region, es, index
                 metadata['workers_type'] = cluster['nodes']['compute_machine_type']['id']
                 metadata['network_type'] = cluster['network']['type']
                 metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
-                metadata['hostedclusters'] = hostedclusters
                 metadata['install_method'] = "rosa"
                 es_ignored_metadata = ""
                 if es is not None:
                     common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
         if metadata == {}:
-            logging.error("Management/Service Cluster %s not found for Org %s on %s AWS region" % (mgmt_cluster, org_id, aws_region))
+            logging.error("Management/Service Cluster %s not found" % mgmt_cluster)
             exit(1)
     return metadata
 
@@ -471,28 +499,30 @@ def _download_kubeconfig(ocm_cmnd, cluster_id, my_path, type):
 
 
 def _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, my_path):
+    cluster_admin_create_time = int(time.time())
     return_data = {}
-    logging.info('Creating cluster-admin user on cluster %s (100 retries allowed)' % cluster_name)
+    logging.info('Creating cluster-admin user on cluster %s (30 minutes timeout)' % cluster_name)
     kubeconfig_cmd = [rosa_cmnd,  "create", "admin", "-c", cluster_name, "-o", "json"]
     logging.debug(kubeconfig_cmd)
-    cluster_admin_create_time = int(time.time())
-    for trying in range(1, 101):
+    # Waiting 30 minutes for cluster-admin user to be created
+    while datetime.datetime.utcnow().timestamp() < cluster_admin_create_time + 30 * 60:
         if force_terminate:
             logging.error("Exiting cluster access process for %s cluster after capturing Ctrl-C" % cluster_name)
             return return_data
         process = subprocess.Popen(kubeconfig_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
         stdout, stderr = process.communicate()
         if process.returncode != 0:
-            logging.warning('Try: %d. Failed to create cluster-admin user on %s with this stdout/stderr:' % (trying, cluster_name))
+            logging.warning('Failed to create cluster-admin user on %s with this stdout/stderr:' % cluster_name)
             logging.warning(stdout)
             logging.warning(stderr)
-            logging.error('Try: %d. Waiting 5 seconds for the next try on %s' % (trying, cluster_name))
+            logging.warning('Waiting 5 seconds for the next try on %s until %s' % (cluster_name, datetime.datetime.fromtimestamp(cluster_admin_create_time + 30 * 60)))
             time.sleep(5)
         else:
-            return_data['cluster-admin-create'] = int(time.time()) - cluster_admin_create_time
-            logging.info('Trying to login on cluster %s (100 retries allowed, 5s timeout on oc command)' % cluster_name)
             oc_login_time = int(time.time())
-            for trying2 in range(1, 101):
+            logging.info("cluster-admin user creation succesfull on cluster %s" % cluster_name)
+            return_data['cluster-admin-create'] = int(time.time()) - cluster_admin_create_time
+            logging.info('Trying to login on cluster %s (30 minutes timeout until %s, 5s timeout on oc command)' % (cluster_name, datetime.datetime.fromtimestamp(oc_login_time + 30 * 60)))
+            while datetime.datetime.utcnow().timestamp() < oc_login_time + 30 * 60:
                 if force_terminate:
                     logging.error("Exiting cluster access process for %s cluster after capturing Ctrl-C" % cluster_name)
                     return return_data
@@ -501,54 +531,56 @@ def _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, my_path):
                 process_oc_login = subprocess.Popen(oc_login_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
                 stdout_oc_login, stderr_oc_login = process_oc_login.communicate()
                 if process_oc_login.returncode != 0:
-                    logging.warning('Try: %d. Failed to login on cluster %s with cluster-admin user with this stdout/stderr:' % (trying2, cluster_name))
+                    logging.warning('Failed to login on cluster %s with cluster-admin user with this stdout/stderr:' % cluster_name)
                     logging.warning(stdout_oc_login)
                     logging.warning(stderr_oc_login)
-                    logging.warning('Try: %d. Waiting 5 seconds for the next try on %s' % (trying2, cluster_name))
+                    logging.warning('Waiting 5 seconds until %s for the next try on %s' % (cluster_name, datetime.datetime.fromtimestamp(oc_login_time + 30 * 60)))
                     time.sleep(5)
                 else:
                     oc_adm_time_start = int(time.time())
+                    logging.info("Login succesfull on cluster %s" % cluster_name)
                     return_data['cluster-admin-login'] = int(time.time()) - oc_login_time
                     return_data['kubeconfig'] = my_path + "/kubeconfig"
-                    logging.info("Try: %d. Login succesfull on cluster %s" % (trying2, cluster_name))
                     myenv = os.environ.copy()
                     myenv["KUBECONFIG"] = return_data['kubeconfig']
                     oc_adm_cmnd = ["oc", "adm", "top", "images"]
+                    logging.info('Trying to perform oc adm command on cluster %s until %s' % (cluster_name, datetime.datetime.fromtimestamp(oc_adm_time_start + 30 * 60)))
                     logging.debug(oc_adm_cmnd)
-                    for trying3 in range(1, 101):
+                    while datetime.datetime.utcnow().timestamp() < oc_adm_time_start + 30 * 60:
                         if force_terminate:
                             logging.error("Exiting cluster access process for %s cluster after capturing Ctrl-C" % cluster_name)
                             return return_data
                         process_oc_adm = subprocess.Popen(oc_adm_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path,  universal_newlines=True, env=myenv)
                         stdout_oc_adm, stderr_oc_adm = process_oc_adm.communicate()
                         if process_oc_adm.returncode != 0:
-                            logging.warning("Try %d. Failed to perform oc adm command on %s with downloaded kubeconfig %s" % (trying3, cluster_name, my_path + "/kubeconfig"))
+                            logging.warning("Failed to perform oc adm command on %s with downloaded kubeconfig %s" % (cluster_name, my_path + "/kubeconfig"))
                             logging.warning(stdout_oc_adm)
                             logging.warning(stderr_oc_adm)
-                            logging.warning('Try: %d. Waiting 5 seconds for the next try on %s' % (trying3, cluster_name))
+                            logging.warning('Waiting 5 seconds for the next try on %s' % cluster_name)
                             time.sleep(5)
                         else:
-                            logging.info("Try %d. Verified admin access to %s, using %s kubeconfig file." % (trying3, cluster_name, my_path + "/kubeconfig"))
+                            logging.info("Verified admin access to %s, using %s kubeconfig file." % (cluster_name, my_path + "/kubeconfig"))
                             return_data['cluster-oc-adm'] = int(time.time()) - oc_adm_time_start
                             return return_data
-                    logging.error("Failed to execute `oc adm top images` cluster %s after 100 retries. Exiting" % cluster_name)
+                    logging.error("Failed to execute `oc adm top images` cluster %s after 30 minutes. Exiting" % cluster_name)
                     return return_data
-            logging.error("Failed to login on cluster %s after 100 retries. Exiting" % cluster_name)
+            logging.error("Failed to login on cluster %s after 30 minutes retries. Exiting" % cluster_name)
             return return_data
-    logging.error("Failed to create cluster-admin user on cluster %s after 100 retries. Exiting" % cluster_name)
+    logging.error("Failed to create cluster-admin user on cluster %s after 30 minutes. Exiting" % cluster_name)
     return return_data
 
 
 def _preflight_wait(rosa_cmnd, cluster_id, cluster_name):
-    logging.info('Collecting preflight times for cluster %s' % cluster_name)
     return_data = {}
     start_time = int(time.time())
     previous_status = ""
-    for trying in range(1, 1801):
+    logging.info('Collecting preflight times for cluster %s during 60 minutes until %s' % (cluster_name, datetime.datetime.fromtimestamp(start_time + 60 * 60)))
+    # Waiting 1 hour for preflight checks to end
+    while datetime.datetime.utcnow().timestamp() < start_time + 60 * 60:
         if force_terminate:
             logging.error("Exiting preflight times capturing on %s cluster after capturing Ctrl-C" % cluster_name)
             return 0
-        logging.info('Try: %d. Getting status for cluster %s' % (trying, cluster_name))
+        logging.info('Getting status for cluster %s' % cluster_name)
         status_cmnd = [rosa_cmnd, "describe", "cluster", "-c", cluster_id, "-o", "json"]
         logging.debug(status_cmnd)
         status_process = subprocess.Popen(status_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
@@ -557,31 +589,32 @@ def _preflight_wait(rosa_cmnd, cluster_id, cluster_name):
         try:
             current_status = json.loads(status_stdout)['state']
         except Exception as err:
-            logging.error("Try: %d. Cannot load metadata for cluster %s" % (trying, cluster_name))
+            logging.error("Cannot load metadata for cluster %s" % cluster_name)
             logging.error(err)
             continue
         if current_status != previous_status and previous_status != "":
             return_data[previous_status] = current_time - start_time
             start_time = current_time
-            logging.info("Try: %d. Cluster %s moved from %s status to %s status after %d seconds" % (trying, cluster_name, previous_status, current_status, return_data[previous_status]))
+            logging.info("Cluster %s moved from %s status to %s status after %d seconds" % (cluster_name, previous_status, current_status, return_data[previous_status]))
             if current_status == "installing":
-                logging.info("Try: %d. Cluster %s is on installing status. Exiting preflights waiting..." % (trying, cluster_name))
+                logging.info("Cluster %s is on installing status. Exiting preflights waiting..." % cluster_name)
                 return return_data
         else:
-            logging.info("Try: %d. Cluster %s on %s status. Waiting 2 seconds for next check" % (trying, cluster_name, current_status))
-            time.sleep(2)
+            logging.info("Cluster %s on %s status. Waiting 2 seconds until %s for next check" % (cluster_name, current_status, datetime.datetime.fromtimestamp(start_time + 60 * 60)))
+            time.sleep(1)
         previous_status = current_status
-    logging.error("Try: %d. Cluster %s on %s status (not installing) after 150 retries. Exiting preflight waiting..." % (trying, cluster_name, current_status))
+    logging.error("Cluster %s on %s status (not installing) after 60 minutes. Exiting preflight waiting..." % (cluster_name, current_status))
     return return_data
 
 
 def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
-    logging.info('Capturing namespace creation time on %s Cluster for %s' % (type, cluster_name))
     start_time = int(time.time())
+    logging.info('Capturing namespace creation time on %s Cluster for %s. Waiting 30 minutes until %s' % (type, cluster_name, datetime.datetime.fromtimestamp(start_time + 30 * 60)))
     myenv = os.environ.copy()
     myenv["KUBECONFIG"] = kubeconfig
     projects_cmnd = ["oc", "get", "projects", "--output", "json"]
-    for trying in range(1, 101):
+    # Waiting 30 minutes for preflight checks to end
+    while datetime.datetime.utcnow().timestamp() < start_time + 30 * 60:
         if force_terminate:
             logging.error("Exiting namespace creation waiting for %s on the %s cluster after capturing Ctrl-C" % (cluster_name, type))
             return 0
@@ -591,7 +624,7 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
         if projects_process.returncode != 0:
             logging.warning(projects_process_stdout)
             logging.warning(projects_process_stderr)
-            logging.warning("Try: %d. Failed to get the project list on the %s Cluster. Retrying in 5 seconds" % (trying, type))
+            logging.warning("Failed to get the project list on the %s Cluster. Retrying in 5 seconds. Waiting until %s" % (type, datetime.datetime.fromtimestamp(start_time + 30 * 60)))
             time.sleep(5)
         else:
             try:
@@ -600,7 +633,7 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
                 logging.warning(projects_process_stdout)
                 logging.warning(projects_process_stderr)
                 logging.warning(err)
-                logging.warning("Try: %d. Failed to get the project list on the %s Cluster. Retrying in 5 seconds" % (trying, type))
+                logging.warning("Failed to get the project list on the %s Cluster. Retrying in 5 seconds until %s" % (type, datetime.datetime.fromtimestamp(start_time + 30 * 60)))
                 time.sleep(5)
                 continue
             projects = projects_json['items'] if 'items' in projects_json else []
@@ -610,16 +643,16 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
                     namespace_count += 1
             if (type == "Service" and namespace_count == 2) or (type == "Management" and namespace_count == 3):
                 end_time = int(time.time())
-                logging.info("Try: %d. Namespace for %s created in %s cluster in %d seconds" % (trying, cluster_name, type, (end_time - start_time)))
+                logging.info("Namespace for %s created in %s cluster in %d seconds" % (cluster_name, type, (end_time - start_time)))
                 return end_time - start_time
             else:
-                logging.warning("Try: %d. Namespace for %s not found in %s Cluster. Retrying in 5 seconds" % (trying, cluster_name, type))
+                logging.warning("Namespace for %s not found in %s Cluster. Retrying in 5 seconds until %s" % (cluster_name, type, datetime.datetime.fromtimestamp(start_time + 30 * 60)))
                 time.sleep(5)
-    logging.error("Failed to get namespace for %s on the %s cluster after 100 retries" % (cluster_name, type))
+    logging.error("Failed to get namespace for %s on the %s cluster after 15 minutes" % (cluster_name, type))
     return 0
 
 
-def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt_cluster_name, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, mgmt_kubeconfig, sc_kubeconfig, all_clusters_installed, svc_cluster_name, oidc_config_id, workload_type, kube_burner_version, e2e_git_details, git_branch, operator_roles_prefix, worker_label):
+def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, service_cluster_name, sc_kubeconfig, all_clusters_installed, oidc_config_id, workload_type, kube_burner_version, e2e_git_details, git_branch, operator_roles_prefix, worker_label):
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
     os.mkdir(cluster_path)
@@ -646,6 +679,9 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
     metadata = {}
     trying = 0
     while trying <= 5:
+        if force_terminate:
+            logging.error("Exiting cluster creation for %s after capturing Ctrl-C" % cluster_name)
+            return 0
         process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
         stdout, stderr = process.communicate()
         trying += 1
@@ -667,12 +703,14 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
             metadata = get_metadata(cluster_name, rosa_cmnd)
             metadata['install_try'] = trying
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                sc_namespace = executor.submit(_namespace_wait, sc_kubeconfig, metadata['cluster_id'], cluster_name, "Service") if sc_kubeconfig != "" else 0
-                mc_namespace = executor.submit(_namespace_wait, mgmt_kubeconfig, metadata['cluster_id'], cluster_name, "Management") if mgmt_kubeconfig != "" else 0
                 preflight_ch = executor.submit(_preflight_wait, rosa_cmnd, metadata['cluster_id'], cluster_name)
-                sc_namespace_timing = sc_namespace.result()
-                mc_namespace_timing = mc_namespace.result()
+                sc_namespace = executor.submit(_namespace_wait, sc_kubeconfig, metadata['cluster_id'], cluster_name, "Service") if sc_kubeconfig != "" else 0
                 preflight_checks = preflight_ch.result()
+                sc_namespace_timing = sc_namespace.result()
+            mgmt_cluster_name = _get_mgmt_cluster(sc_kubeconfig, metadata['cluster_id'], cluster_name)
+            mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster_name, es, index, index_retry, uuid)
+            mgmt_kubeconfig_path = _download_kubeconfig(ocm_cmnd, mgmt_metadata['cluster_id'], cluster_path, "mgmt") if mgmt_cluster_name else None
+            mc_namespace_timing = _namespace_wait(mgmt_kubeconfig_path, metadata['cluster_id'], cluster_name, "Management") if mgmt_kubeconfig_path != "" else 0
             watch_cmd = [rosa_cmnd, "logs", "install", "-c", cluster_name, "--watch"]
             logging.debug(watch_cmd)
             watch_process = subprocess.Popen(watch_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
@@ -739,6 +777,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, mgmt
         time.sleep(random_sleep)
         logging.info("Saving must-gather file of hosted cluster %s" % cluster_name)
         _get_must_gather(cluster_path, cluster_name)
+        _get_mgmt_cluster_must_gather(mgmt_kubeconfig_path, my_path)
 
 
 def _get_workers_ready(kubeconfig, cluster_name):
@@ -771,7 +810,7 @@ def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name):
     myenv = os.environ.copy()
     myenv["KUBECONFIG"] = kubeconfig
     starting_time = datetime.datetime.utcnow().timestamp()
-    logging.debug("Waiting %d minutes for nodes to be Ready on cluster %s" % (wait_time, cluster_name))
+    logging.debug("Waiting %d minutes for nodes to be Ready on cluster %s until %s" % (wait_time, cluster_name, datetime.datetime.fromtimestamp(starting_time + wait_time * 60)))
     while datetime.datetime.utcnow().timestamp() < starting_time + wait_time * 60:
         if force_terminate:
             logging.error("Exiting workers waiting on the cluster %s after capturing Ctrl-C" % cluster_name)
@@ -826,10 +865,9 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, s
         logging.error("Failed to untar Kube-burner from %s to %s" % (my_path + "/kube-burner-" + kube_burner_version + "-Linux-x86_64.tar.gz", my_path + "/kube-burner"))
         return 1
     os.chmod(my_path + '/kube-burner', 0o777)
-
     os.chdir(my_path + '/e2e-benchmarking/workloads/kube-burner-ocp-wrapper')
     load_env["ITERATIONS"] = str(jobs)
-    load_env["EXTRA_FLAGS"] = "--churn-duration=" + load_duration + " --churn-percent=10 --churn-delay=30s"
+    load_env["EXTRA_FLAGS"] = "--churn-duration=" + load_duration + " --churn-percent=10 --churn-delay=30s --timeout=24h"
     if es_url is not None:
         load_env["ES_SERVER"] = es_url
     load_env["LOG_LEVEL"] = "debug"
@@ -1035,7 +1073,7 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
     logging.info('Watcher terminated')
 
 
-def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uuid, es, index, index_retry):
+def _cleanup_cluster(rosa_cmnd, cluster_name, my_path, my_uuid, es, index, index_retry):
     cluster_path = my_path + "/" + cluster_name
     metadata = get_metadata(cluster_name, rosa_cmnd)
     logging.debug('Destroying cluster name: %s' % cluster_name)
@@ -1070,7 +1108,6 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, mgmt_cluster_name, my_path, my_uui
 
     cluster_end_time = int(time.time())
     metadata['install_method'] = "rosa"
-    metadata['mgmt_cluster_name'] = mgmt_cluster_name
     metadata['duration'] = cluster_delete_end_time - cluster_start_time
     metadata['all_duration'] = cluster_end_time - cluster_start_time
     metadata['job_iterations'] = ""
@@ -1116,20 +1153,10 @@ def main():
         required=True,
         help='Token to be used by OCM and ROSA commands')
     parser.add_argument(
-        '--service-cluster',
-        type=str,
+        '--provision-shard',
         required=True,
-        help='Service Cluster name or ID')
-    parser.add_argument(
-        '--mgmt-cluster',
         type=str,
-        required=True,
-        help='Management Cluster name or ID')
-    parser.add_argument(
-        '--mgmt-org-id',
-        type=str,
-        required=True,
-        help='OCM Org ID where Management Cluster is located')
+        help='Provision Shard used to deploy the Hosted Clusters')
     parser.add_argument(
         '--workers',
         type=str,
@@ -1409,6 +1436,9 @@ def main():
             logging.info('`rosa init` execution OK')
             logging.debug(rosa_init_stdout.strip().decode("utf-8"))
 
+    if args.provision_shard:
+        service_cluster = _verify_provision_shard(ocm_cmnd, args.provision_shard)
+
     if args.oidc_config_id:
         oidc_config_id = args.oidc_config_id
         oidc_cleanup = False
@@ -1425,21 +1455,9 @@ def main():
         roles_created = _gen_operator_roles(rosa_cmnd, cluster_name_seed, my_path, oidc_config_id, installer_role_arn)
         operator_roles_prefix = cluster_name_seed if roles_created else ""
 
-    # Get connected to management cluster
-    logging.info("Getting information of %s management cluster on %s organization" % (args.mgmt_cluster, args.mgmt_org_id))
-    mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, args.mgmt_cluster, args.mgmt_org_id, args.aws_region, es, args.es_index, args.es_index_retry, my_uuid, args.cluster_count)
-    mgmt_metadata['provision_shard'] = _get_provision_shard(ocm_cmnd, args.mgmt_cluster, args.aws_region)
-    mgmt_kubeconfig_path = _download_kubeconfig(ocm_cmnd, mgmt_metadata['cluster_id'], my_path, "mgmt") if 'cluster_id' in mgmt_metadata else ""
-    access_to_mgmt_cluster = True if mgmt_kubeconfig_path != "" else False
-    logging.debug('Management Cluster information for %s:' % mgmt_metadata['cluster_name'])
-    logging.debug('             Custer ID:   %s' % mgmt_metadata['cluster_id'])
-    logging.debug('             Base Domain: %s' % mgmt_metadata['base_domain'])
-    logging.debug('             AWS Zone:    %s' % mgmt_metadata['aws_region'])
-    logging.debug('             Access:      %s' % str(access_to_mgmt_cluster))
-
-    # Get connected to service cluster
-    logging.info("Getting information of %s service cluster on %s organization" % (args.service_cluster, args.mgmt_org_id))
-    sc_metadata = _get_mgmt_cluster_info(ocm_cmnd, args.service_cluster, args.mgmt_org_id, args.aws_region, None, args.es_index, args.es_index_retry, my_uuid, args.cluster_count)
+    # Get connected to the Service Cluster
+    logging.info("Getting information of %s Service Cluster" % service_cluster)
+    sc_metadata = _get_mgmt_cluster_info(ocm_cmnd, service_cluster, es, args.es_index, args.es_index_retry, my_uuid)
     sc_kubeconfig_path = _download_kubeconfig(ocm_cmnd, sc_metadata['cluster_id'], my_path, "service") if 'cluster_id' in sc_metadata else ""
     access_to_service_cluster = True if sc_kubeconfig_path != "" else False
 
@@ -1466,50 +1484,53 @@ def main():
     loop_counter = 0
     try:
         while (loop_counter < args.cluster_count):
-            create_cluster = False
-            if args.batch_size != 0:
-                if args.delay_between_batch is None:
-                    # We add 2 to the batch size. 1 for the main thread and 1 for the watcher
-                    while (args.batch_size + 2) <= threading.active_count():
-                        # Wait for thread count to drop before creating another
-                        time.sleep(1)
-                    loop_counter += 1
-                    create_cluster = True
-                elif batch_count >= args.batch_size:
-                    time.sleep(args.delay_between_batch)
-                    batch_count = 0
-                else:
-                    batch_count += 1
-                    loop_counter += 1
-                    create_cluster = True
+            if force_terminate:
+                logging.warning("Not creating cluster %s after Capturing Ctrl-C" % cluster_name_seed + "-" + str(loop_counter).zfill(4))
             else:
-                loop_counter += 1
-                create_cluster = True
-            if create_cluster:
-                logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
-                pattern = re.compile(r"^(\d+)(,\s*\d+)*$")
-                if args.workers.isdigit():
-                    workers = int(args.workers)
+                create_cluster = False
+                if args.batch_size != 0:
+                    if args.delay_between_batch is None:
+                        # We add 2 to the batch size. 1 for the main thread and 1 for the watcher
+                        while (args.batch_size + 2) <= threading.active_count():
+                            # Wait for thread count to drop before creating another
+                            time.sleep(1)
+                        loop_counter += 1
+                        create_cluster = True
+                    elif batch_count >= args.batch_size:
+                        time.sleep(args.delay_between_batch)
+                        batch_count = 0
+                    else:
+                        batch_count += 1
+                        loop_counter += 1
+                        create_cluster = True
                 else:
-                    workers = int(args.workers.split(",")[(loop_counter - 1) % len(args.workers.split(","))])
-                if args.add_cluster_load:
-                    low_jobs = max(0, int((args.cluster_load_jobs_per_worker * workers) - (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100)))
-                    high_jobs = int((args.cluster_load_jobs_per_worker * workers) + (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100))
-                    jobs = random.randint(low_jobs, high_jobs)
-                    logging.debug("Selected jobs: %d" % jobs)
-                else:
-                    jobs = 0
-                vpc_info = ""
-                if args.create_vpc:
-                    vpc_info = vpcs[(loop_counter - 1) % len(vpcs)]
-                    logging.debug("Creating cluster on VPC %s, with subnets: %s" % (vpc_info[0], vpc_info[1]))
-                try:
-                    thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.mgmt_cluster, mgmt_metadata['provision_shard'], args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, mgmt_kubeconfig_path, sc_kubeconfig_path, all_clusters_installed, args.service_cluster, oidc_config_id, args.workload_type, args.kube_burner_version, args.e2e_git_details, args.git_branch, operator_roles_prefix, args.worker_label))
-                except Exception as err:
-                    logging.error(err)
-                cluster_thread_list.append(thread)
-                thread.start()
-                logging.debug('Number of alive threads %d' % threading.active_count())
+                    loop_counter += 1
+                    create_cluster = True
+                if create_cluster:
+                    logging.debug('Starting Cluster thread %d' % (loop_counter + 1))
+                    pattern = re.compile(r"^(\d+)(,\s*\d+)*$")
+                    if args.workers.isdigit():
+                        workers = int(args.workers)
+                    else:
+                        workers = int(args.workers.split(",")[(loop_counter - 1) % len(args.workers.split(","))])
+                    if args.add_cluster_load:
+                        low_jobs = max(0, int((args.cluster_load_jobs_per_worker * workers) - (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100)))
+                        high_jobs = int((args.cluster_load_jobs_per_worker * workers) + (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100))
+                        jobs = random.randint(low_jobs, high_jobs)
+                        logging.debug("Selected jobs: %d" % jobs)
+                    else:
+                        jobs = 0
+                    vpc_info = ""
+                    if args.create_vpc:
+                        vpc_info = vpcs[(loop_counter - 1) % len(vpcs)]
+                        logging.debug("Creating cluster on VPC %s, with subnets: %s" % (vpc_info[0], vpc_info[1]))
+                    try:
+                        thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.provision_shard, args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, service_cluster, sc_kubeconfig_path, all_clusters_installed, oidc_config_id, args.workload_type, args.kube_burner_version, args.e2e_git_details, args.git_branch, operator_roles_prefix))
+                    except Exception as err:
+                        logging.error(err)
+                    cluster_thread_list.append(thread)
+                    thread.start()
+                    logging.debug('Number of alive threads %d' % threading.active_count())
 
     except Exception as err:
         logging.error(err)
@@ -1529,10 +1550,6 @@ def main():
                 continue
             else:
                 raise
-
-    if access_to_mgmt_cluster:
-        logging.info('Collect must-gather from Management Cluster %s' % mgmt_metadata['cluster_name'])
-        _get_mgmt_cluster_must_gather(mgmt_kubeconfig_path, my_path)
 
     if access_to_service_cluster:
         logging.info('Collect must-gather from Service Cluster %s' % sc_metadata['cluster_name'])
@@ -1558,7 +1575,7 @@ def main():
             if 'name' in cluster and cluster_name_seed in cluster['name']:
                 logging.debug('Starting cluster cleanup %s' % cluster['name'])
                 try:
-                    thread = threading.Thread(target=_cleanup_cluster, args=(rosa_cmnd, cluster['name'], args.mgmt_cluster, my_path, my_uuid, es, args.es_index, args.es_index_retry))
+                    thread = threading.Thread(target=_cleanup_cluster, args=(rosa_cmnd, cluster['name'], my_path, my_uuid, es, args.es_index, args.es_index_retry))
                 except Exception as err:
                     logging.error('Thread creation failed')
                     logging.error(err)
