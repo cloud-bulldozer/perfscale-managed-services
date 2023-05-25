@@ -706,11 +706,11 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
                 preflight_ch = executor.submit(_preflight_wait, rosa_cmnd, metadata['cluster_id'], cluster_name)
                 sc_namespace = executor.submit(_namespace_wait, sc_kubeconfig, metadata['cluster_id'], cluster_name, "Service") if sc_kubeconfig != "" else 0
                 preflight_checks = preflight_ch.result()
-                sc_namespace_timing = sc_namespace.result()
-            mgmt_cluster_name = _get_mgmt_cluster(sc_kubeconfig, metadata['cluster_id'], cluster_name)
-            mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster_name, es, index, index_retry, uuid)
+                sc_namespace_timing = sc_namespace.result() if sc_kubeconfig != "" else 0
+            mgmt_cluster_name = _get_mgmt_cluster(sc_kubeconfig, metadata['cluster_id'], cluster_name) if sc_kubeconfig != "" else None
+            mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster_name, es, index, index_retry, uuid) if mgmt_cluster_name else None
             mgmt_kubeconfig_path = _download_kubeconfig(ocm_cmnd, mgmt_metadata['cluster_id'], cluster_path, "mgmt") if mgmt_cluster_name else None
-            mc_namespace_timing = _namespace_wait(mgmt_kubeconfig_path, metadata['cluster_id'], cluster_name, "Management") if mgmt_kubeconfig_path != "" else 0
+            mc_namespace_timing = _namespace_wait(mgmt_kubeconfig_path, metadata['cluster_id'], cluster_name, "Management") if mgmt_kubeconfig_path else 0
             watch_cmd = [rosa_cmnd, "logs", "install", "-c", cluster_name, "--watch"]
             logging.debug(watch_cmd)
             watch_process = subprocess.Popen(watch_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
@@ -849,7 +849,7 @@ def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name):
 def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, jobs, es_url, mgmt_kubeconfig, workload_type, kube_burner_version, e2e_git_details, git_branch):
     load_env = os.environ.copy()
     load_env["KUBECONFIG"] = kubeconfig
-    load_env["MC_KUBECONFIG"] = mgmt_kubeconfig
+    load_env["MC_KUBECONFIG"] = mgmt_kubeconfig if mgmt_kubeconfig else ""
     logging.info('Cloning e2e-benchmarking repo %s', )
     Repo.clone_from(e2e_git_details, my_path + '/e2e-benchmarking', branch=git_branch)
     url = "https://github.com/cloud-bulldozer/kube-burner/releases/download/v" + kube_burner_version + "/kube-burner-" + kube_burner_version + "-Linux-x86_64.tar.gz"
@@ -1124,7 +1124,7 @@ def main():
         help='Token to be used by OCM and ROSA commands')
     parser.add_argument(
         '--provision-shard',
-        required=True,
+        required=False,
         type=str,
         help='Provision Shard used to deploy the Hosted Clusters')
     parser.add_argument(
@@ -1150,8 +1150,7 @@ def main():
     parser.add_argument(
         '--rosa-env',
         type=str,
-        help='ROSA environment (prod, staging, integration)',
-        default='staging')
+        help='ROSA environment (staging, integration). Do not set any for production')
     parser.add_argument(
         '--rosa-cli',
         type=str,
@@ -1375,7 +1374,10 @@ def main():
         logging.debug(ocm_login_stdout.strip().decode("utf-8"))
 
     logging.info('Attempting to log in OCM using `rosa login`')
-    rosa_login_command = [rosa_cmnd, "login", "--token", args.ocm_token, '--env', args.rosa_env]
+    rosa_login_command = [rosa_cmnd, "login", "--token", args.ocm_token]
+    if args.rosa_env:
+        rosa_login_command.append("--env")
+        rosa_login_command.append(args.rosa_env)
     logging.debug(rosa_login_command)
     rosa_login_process = subprocess.Popen(rosa_login_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     rosa_login_stdout, rosa_login_stderr = rosa_login_process.communicate()
@@ -1389,7 +1391,10 @@ def main():
 
     if args.rosa_init:
         logging.info('Executing `rosa init` command to configure AWS account')
-        rosa_init_command = [rosa_cmnd, "init", "--token", args.ocm_token, "--env", args.rosa_env]
+        rosa_init_command = [rosa_cmnd, "init", "--token", args.ocm_token]
+        if args.rosa_env:
+            rosa_login_command.append("--env")
+            rosa_login_command.append(args.rosa_env)
         logging.debug(rosa_init_command)
         rosa_init_process = subprocess.Popen(rosa_init_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         rosa_init_stdout, rosa_init_stderr = rosa_init_process.communicate()
@@ -1401,6 +1406,7 @@ def main():
             logging.info('`rosa init` execution OK')
             logging.debug(rosa_init_stdout.strip().decode("utf-8"))
 
+    service_cluster = ""
     if args.provision_shard:
         service_cluster = _verify_provision_shard(ocm_cmnd, args.provision_shard)
 
@@ -1422,8 +1428,8 @@ def main():
 
     # Get connected to the Service Cluster
     logging.info("Getting information of %s Service Cluster" % service_cluster)
-    sc_metadata = _get_mgmt_cluster_info(ocm_cmnd, service_cluster, es, args.es_index, args.es_index_retry, my_uuid)
-    sc_kubeconfig_path = _download_kubeconfig(ocm_cmnd, sc_metadata['cluster_id'], my_path, "service") if 'cluster_id' in sc_metadata else ""
+    sc_metadata = _get_mgmt_cluster_info(ocm_cmnd, service_cluster, es, args.es_index, args.es_index_retry, my_uuid) if service_cluster else None
+    sc_kubeconfig_path = _download_kubeconfig(ocm_cmnd, sc_metadata['cluster_id'], my_path, "service") if service_cluster and 'cluster_id' in sc_metadata else ""
     access_to_service_cluster = True if sc_kubeconfig_path != "" else False
 
     if args.create_vpc:
