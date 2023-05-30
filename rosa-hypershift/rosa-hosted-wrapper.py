@@ -148,7 +148,6 @@ def _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path):
     if oidc_gen_process.returncode != 0:
         logging.error('Unable to generate OIDC Provider. Please check logfile %s' % my_path + "/" + 'oidc_config_id_gen.log')
         exit(1)
-
     # the rosa cli output does not give us the OIDC Provider ID so we need to scrape it after
     oidc_get_cmd = [rosa_cmnd, 'list', 'oidc-config', '-o', 'json']
     oidc_get_process = subprocess.Popen(oidc_get_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -706,11 +705,11 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
                 preflight_ch = executor.submit(_preflight_wait, rosa_cmnd, metadata['cluster_id'], cluster_name)
                 sc_namespace = executor.submit(_namespace_wait, sc_kubeconfig, metadata['cluster_id'], cluster_name, "Service") if sc_kubeconfig != "" else 0
                 preflight_checks = preflight_ch.result()
-                sc_namespace_timing = sc_namespace.result()
-            mgmt_cluster_name = _get_mgmt_cluster(sc_kubeconfig, metadata['cluster_id'], cluster_name)
-            mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster_name, es, index, index_retry, uuid)
+                sc_namespace_timing = sc_namespace.result() if sc_kubeconfig != "" else 0
+            mgmt_cluster_name = _get_mgmt_cluster(sc_kubeconfig, metadata['cluster_id'], cluster_name) if sc_kubeconfig != "" else None
+            mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster_name, es, index, index_retry, uuid) if mgmt_cluster_name else None
             mgmt_kubeconfig_path = _download_kubeconfig(ocm_cmnd, mgmt_metadata['cluster_id'], cluster_path, "mgmt") if mgmt_cluster_name else None
-            mc_namespace_timing = _namespace_wait(mgmt_kubeconfig_path, metadata['cluster_id'], cluster_name, "Management") if mgmt_kubeconfig_path != "" else 0
+            mc_namespace_timing = _namespace_wait(mgmt_kubeconfig_path, metadata['cluster_id'], cluster_name, "Management") if mgmt_kubeconfig_path else 0
             watch_cmd = [rosa_cmnd, "logs", "install", "-c", cluster_name, "--watch"]
             logging.debug(watch_cmd)
             watch_process = subprocess.Popen(watch_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
@@ -730,20 +729,39 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
                 wait_time = 0
                 cluster_load = False
                 metadata['status'] = "Ready. Not Access"
+            if args.machinepool_name:
+                _add_machinepools(rosa_cmnd, kubeconfig, metadata,
+                                  args.machinepool_name,
+                                  args.machinepool_flavour,
+                                  args.machinepool_labels,
+                                  args.machinepool_taints,
+                                  args.machinepool_replicas)
+            metadata['workers_ready'] = ""
+            metadata['extra_pool_workers_ready'] = ""
             if wait_time != 0:
-                logging.info("Waiting %d minutes for %d workers to be ready on %s" % (wait_time, worker_nodes, cluster_name))
-                workers_ready = _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name)
-                cluster_workers_ready = int(time.time())
-                logging.info("%d workers ready after %d seconds on %s" % (workers_ready, cluster_workers_ready - cluster_start_time, cluster_name))
-                if cluster_load and workers_ready != worker_nodes:
-                    logging.error("Insufficient number of workers (%d). Expected: %d. Disabling e2e-benchmarking execution on %s" % (workers_ready, worker_nodes, cluster_name))
-                    cluster_load = False
-                    metadata['status'] = "Ready. No Workers"
-                metadata['workers_ready'] = cluster_workers_ready - cluster_start_time if workers_ready == worker_nodes else ""
-            else:
-                logging.info("Cluster %s ready. Not waiting for workers to be ready. Setting workers_ready to 0 on ES Document" % cluster_name)
-                metadata['workers_ready'] = 0
-                cluster_load = False
+                with concurrent.futures.ThreadPoolExecutor() as wait_executor:
+                    futures = [wait_executor.submit(_wait_for_workers, kubeconfig, worker_nodes, wait_time, cluster_name, "workers"), ]
+                    futures.append(wait_executor.submit(_wait_for_workers, kubeconfig, args.machinepool_replicas, wait_time, cluster_name, args.machinepool_name)) if args.machinepool_name else None
+                    for future in concurrent.futures.as_completed(futures):
+                        logging.debug(future)
+                        result = future.result()
+                        if result[0] == "workers":
+                            default_pool_workers = int(result[1])
+                            metadata['workers_ready'] = result[2] if default_pool_workers == worker_nodes else ""
+                        else:
+                            extra_pool_workers = int(result[1])
+                            metadata['extra_pool_workers_ready'] = result[2] if args.machinepool_name and extra_pool_workers == args.machinepool_replicas else ""
+                if cluster_load:
+                    if default_pool_workers != worker_nodes:
+                        logging.error("Insufficient number of workers on default machinepool (%d). Expected: %d. Disabling e2e-benchmarking execution on %s" % (default_pool_workers, worker_nodes, cluster_name))
+                        cluster_load = False
+                        metadata['status'] = "Ready. Not enough workers on default pool"
+                    elif args.machinepool_name and extra_pool_workers != args.machinepool_replicas:
+                        logging.error("Insufficient number of workers on extra machinepool %s (%d). Expected: %d. Disabling e2e-benchmarking execution on %s" % (args.machinepool_name, extra_pool_workers, args.machinepool_replicas, cluster_name))
+                        cluster_load = False
+                        metadata['status'] = "Ready. Not enough workers on extra pool"
+                else:
+                    logging.info("All workers ready, executing e2e-benchmarking on %s" % cluster_name)
             break
     metadata['mgmt_cluster_name'] = mgmt_cluster_name
     metadata['duration'] = cluster_end_time - cluster_start_time
@@ -797,24 +815,28 @@ def _get_workers_ready(kubeconfig, cluster_name):
     nodes = nodes_json['items'] if 'items' in nodes_json else []
     status = []
     for node in nodes:
-        conditions = node['status']['conditions'] if 'status' in node and 'conditions' in node['status'] else []
-        for condition in conditions:
-            if 'type' in condition and condition['type'] == 'Ready':
-                status.append(condition['status'])
+        nodepool = node['metadata']['labels']['hypershift.openshift.io/nodePool'] if node.get('metadata', {}).get('labels', {}).get('hypershift.openshift.io/nodePool') else ""
+        if 'workers' in nodepool:
+            conditions = node['status']['conditions'] if node.get('status', {}).get('conditions', {}) else []
+            for condition in conditions:
+                if 'type' in condition and condition['type'] == 'Ready':
+                    status.append(condition['status'])
     status_list = {i: status.count(i) for i in status}
     ready_nodes = status_list['True'] if 'True' in status_list else 0
     return ready_nodes
 
 
-def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name):
+def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name, machinepool_name):
+    logging.info("Waiting %d minutes for %d workers to be ready on %s machinepool on %s" % (wait_time, worker_nodes, machinepool_name, cluster_name))
     myenv = os.environ.copy()
     myenv["KUBECONFIG"] = kubeconfig
+    result = [machinepool_name]
     starting_time = datetime.datetime.utcnow().timestamp()
     logging.debug("Waiting %d minutes for nodes to be Ready on cluster %s until %s" % (wait_time, cluster_name, datetime.datetime.fromtimestamp(starting_time + wait_time * 60)))
     while datetime.datetime.utcnow().timestamp() < starting_time + wait_time * 60:
         if force_terminate:
             logging.error("Exiting workers waiting on the cluster %s after capturing Ctrl-C" % cluster_name)
-            return 0
+            return []
         logging.info('Getting node information for cluster %s' % cluster_name)
         nodes_command = ["oc", "get", "nodes", "-o", "json"]
         logging.debug(nodes_command)
@@ -828,29 +850,65 @@ def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name):
             time.sleep(15)
             continue
         nodes = nodes_json['items'] if 'items' in nodes_json else []
-        status = []
-        for node in nodes:
-            conditions = node['status']['conditions'] if 'status' in node and 'conditions' in node['status'] else []
-            for condition in conditions:
-                if 'type' in condition and condition['type'] == 'Ready':
-                    status.append(condition['status'])
-        status_list = {i: status.count(i) for i in status}
-        ready_nodes = status_list['True'] if 'True' in status_list else 0
+
+        # First we find nodes which label nodePool match the machinepool name and then we check if type:Ready is on the conditions
+        ready_nodes = sum(
+            len(list(filter(lambda x: x.get('type') == 'Ready' and x.get('status') == "True", node['status']['conditions'])))
+            for node in nodes
+            if node.get('metadata', {}).get('labels', {}).get('hypershift.openshift.io/nodePool')
+            and machinepool_name in node['metadata']['labels']['hypershift.openshift.io/nodePool']
+        ) if nodes else 0
+
         if ready_nodes == worker_nodes:
-            logging.info("Found %d Ready nodes on cluster %s. Expected: %d. Stopping wait." % (ready_nodes, cluster_name, worker_nodes))
-            return ready_nodes
+            logging.info("Found %d/%d ready nodes on machinepool %s for cluster %s. Stopping wait." % (ready_nodes, worker_nodes, machinepool_name, cluster_name))
+            result.append(ready_nodes)
+            result.append(str(datetime.datetime.utcnow().timestamp() - starting_time))
+            return result
         else:
-            logging.info("Found %d Ready nodes on cluster %s. Expected: %d. Waiting 15 seconds for next check..." % (ready_nodes, cluster_name, worker_nodes))
+            logging.info("Found %d/%d ready nodes on machinepool %s for cluster %s. Waiting 15 seconds for next check..." % (ready_nodes, worker_nodes, machinepool_name, cluster_name))
             time.sleep(15)
-    logging.error("Waiting time expired. After %d minutes there are %d ready nodes (Expected: %d) on cluster %s" % (wait_time, ready_nodes, worker_nodes, cluster_name))
-    return ready_nodes
+    logging.error("Waiting time expired. After %d minutes there are %d/%d ready nodes on %s machinepool for cluster %s" % (wait_time, ready_nodes, worker_nodes, machinepool_name, cluster_name))
+    result.append(ready_nodes)
+    result.append("")
+    return result
+
+
+def _add_machinepools(rosa_cmnd, kubeconfig, metadata, machinepool_name, machinepool_flavour, machinepool_labels, machinepool_taints, machinepool_replicas):
+    logging.info('Creating %d machinepools %s-ID on %s, one per AWS Zone' % (len(metadata['zones']), machinepool_name, metadata['cluster_name']))
+    machines_per_zone = machinepool_replicas // len(metadata['zones'])
+    extra_machines = machinepool_replicas % len(metadata['zones'])
+    zone_machines = [machines_per_zone] * len(metadata['zones'])
+    if extra_machines > 0:
+        zone_machines[-1] += extra_machines
+    for id, zone in enumerate(metadata['zones']):
+        machinepool_cmd = [rosa_cmnd, "create", "machinepool",
+                           "--cluster", metadata['cluster_id'],
+                           "--instance-type", machinepool_flavour,
+                           "--name", machinepool_name + "-" + str(id),
+                           "--replicas", str(zone_machines[id]),
+                           "--availability-zone", zone,
+                           "-y"]
+        if machinepool_labels:
+            machinepool_cmd.append("--labels")
+            machinepool_cmd.append(machinepool_labels)
+        if machinepool_taints:
+            machinepool_cmd.append("--tains")
+            machinepool_cmd.append(machinepool_taints)
+
+        logging.debug(machinepool_cmd)
+        machinepool_process = subprocess.Popen(machinepool_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        machinepool_stdout, machinepool_stderr = machinepool_process.communicate()
+        if machinepool_process.returncode != 0:
+            logging.error('Unable to create machinepool %s on %s' % (machinepool_name + "-" + id, metadata['cluster_name']))
+            logging.error(machinepool_stdout.strip().decode("utf-8"))
+            logging.error(machinepool_stderr.strip().decode("utf-8"))
 
 
 def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, jobs, es_url, mgmt_kubeconfig, sc_kubeconfig, workload_type, kube_burner_version, e2e_git_details, git_branch):
     load_env = os.environ.copy()
     load_env["KUBECONFIG"] = kubeconfig
-    load_env["MC_KUBECONFIG"] = mgmt_kubeconfig
-    load_env["SC_KUBECONFIG"] = sc_kubeconfig
+    load_env["MC_KUBECONFIG"] = mgmt_kubeconfig if mgmt_kubeconfig else ""
+    load_env["SC_KUBECONFIG"] = sc_kubeconfig if sc_kubeconfig else ""
     logging.info('Cloning e2e-benchmarking repo %s', )
     Repo.clone_from(e2e_git_details, my_path + '/e2e-benchmarking', branch=git_branch)
     url = "https://github.com/cloud-bulldozer/kube-burner/releases/download/v" + kube_burner_version + "/kube-burner-" + kube_burner_version + "-Linux-x86_64.tar.gz"
@@ -959,6 +1017,7 @@ def get_metadata(cluster_name, rosa_cmnd):
         metadata['workers'] = metadata_hosted_info['nodes']['compute']
         metadata["status"] = metadata_hosted_info['state']
         metadata["version"] = metadata_hosted_info['version']['raw_id']
+        metadata["zones"] = metadata_hosted_info['nodes']['availability_zones']
     except Exception as err:
         logging.error("Cannot load metadata for cluster %s" % cluster_name)
         logging.error(err)
@@ -1102,6 +1161,7 @@ def main():
                                      parents=[parentParsers.esParser,
                                               parentParsers.runnerParser,
                                               parentParsers.clusterParser,
+                                              parentParsers.machinepoolParser,
                                               parentParsers.logParser])
     parser.add_argument(
         '--aws-account-file',
@@ -1125,7 +1185,7 @@ def main():
         help='Token to be used by OCM and ROSA commands')
     parser.add_argument(
         '--provision-shard',
-        required=True,
+        required=False,
         type=str,
         help='Provision Shard used to deploy the Hosted Clusters')
     parser.add_argument(
@@ -1151,8 +1211,7 @@ def main():
     parser.add_argument(
         '--rosa-env',
         type=str,
-        help='ROSA environment (prod, staging, integration)',
-        default='staging')
+        help='ROSA environment (staging, integration). Do not set any for production')
     parser.add_argument(
         '--rosa-cli',
         type=str,
@@ -1190,7 +1249,7 @@ def main():
         '--workers-wait-time',
         type=int,
         default=60,
-        help="Waiting time in minutes for the workers to be Ready after cluster installation.. If 0, do not wait. Default: 60 minutes")
+        help="Waiting time in minutes for the workers to be Ready after cluster installation or machinepool creation . If 0, do not wait. Default: 60 minutes")
     parser.add_argument(
         '--terraform-cli',
         type=str,
@@ -1376,7 +1435,10 @@ def main():
         logging.debug(ocm_login_stdout.strip().decode("utf-8"))
 
     logging.info('Attempting to log in OCM using `rosa login`')
-    rosa_login_command = [rosa_cmnd, "login", "--token", args.ocm_token, '--env', args.rosa_env]
+    rosa_login_command = [rosa_cmnd, "login", "--token", args.ocm_token]
+    if args.rosa_env:
+        rosa_login_command.append("--env")
+        rosa_login_command.append(args.rosa_env)
     logging.debug(rosa_login_command)
     rosa_login_process = subprocess.Popen(rosa_login_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     rosa_login_stdout, rosa_login_stderr = rosa_login_process.communicate()
@@ -1390,7 +1452,10 @@ def main():
 
     if args.rosa_init:
         logging.info('Executing `rosa init` command to configure AWS account')
-        rosa_init_command = [rosa_cmnd, "init", "--token", args.ocm_token, "--env", args.rosa_env]
+        rosa_init_command = [rosa_cmnd, "init", "--token", args.ocm_token]
+        if args.rosa_env:
+            rosa_login_command.append("--env")
+            rosa_login_command.append(args.rosa_env)
         logging.debug(rosa_init_command)
         rosa_init_process = subprocess.Popen(rosa_init_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         rosa_init_stdout, rosa_init_stderr = rosa_init_process.communicate()
@@ -1402,6 +1467,7 @@ def main():
             logging.info('`rosa init` execution OK')
             logging.debug(rosa_init_stdout.strip().decode("utf-8"))
 
+    service_cluster = ""
     if args.provision_shard:
         service_cluster = _verify_provision_shard(ocm_cmnd, args.provision_shard)
 
@@ -1423,8 +1489,8 @@ def main():
 
     # Get connected to the Service Cluster
     logging.info("Getting information of %s Service Cluster" % service_cluster)
-    sc_metadata = _get_mgmt_cluster_info(ocm_cmnd, service_cluster, es, args.es_index, args.es_index_retry, my_uuid)
-    sc_kubeconfig_path = _download_kubeconfig(ocm_cmnd, sc_metadata['cluster_id'], my_path, "service") if 'cluster_id' in sc_metadata else ""
+    sc_metadata = _get_mgmt_cluster_info(ocm_cmnd, service_cluster, es, args.es_index, args.es_index_retry, my_uuid) if service_cluster else None
+    sc_kubeconfig_path = _download_kubeconfig(ocm_cmnd, sc_metadata['cluster_id'], my_path, "service") if service_cluster and 'cluster_id' in sc_metadata else ""
     access_to_service_cluster = True if sc_kubeconfig_path != "" else False
 
     if args.create_vpc:
