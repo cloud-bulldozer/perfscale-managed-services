@@ -501,14 +501,15 @@ def _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, my_path):
     cluster_admin_create_time = int(time.time())
     return_data = {}
     logging.info('Creating cluster-admin user on cluster %s (30 minutes timeout)' % cluster_name)
-    kubeconfig_cmd = [rosa_cmnd,  "create", "admin", "-c", cluster_name, "-o", "json"]
-    logging.debug(kubeconfig_cmd)
+    rosa_create_admin_debug_log = open(my_path + "/" + 'rosa_create_admin_debug.log', 'w')
+    rosa_create_admin_cmd = [rosa_cmnd,  "create", "admin", "-c", cluster_name, "-o", "json", "--debug"]
+    logging.debug(rosa_create_admin_cmd)
     # Waiting 30 minutes for cluster-admin user to be created
     while datetime.datetime.utcnow().timestamp() < cluster_admin_create_time + 30 * 60:
         if force_terminate:
             logging.error("Exiting cluster access process for %s cluster after capturing Ctrl-C" % cluster_name)
             return return_data
-        process = subprocess.Popen(kubeconfig_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
+        process = subprocess.Popen(rosa_create_admin_cmd, stdout=subprocess.PIPE, stderr=rosa_create_admin_debug_log, cwd=my_path, universal_newlines=True)
         stdout, stderr = process.communicate()
         if process.returncode != 0:
             logging.warning('Failed to create cluster-admin user on %s with this stdout/stderr:' % cluster_name)
@@ -521,11 +522,12 @@ def _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, my_path):
             logging.info("cluster-admin user creation succesfull on cluster %s" % cluster_name)
             return_data['cluster-admin-create'] = int(time.time()) - cluster_admin_create_time
             logging.info('Trying to login on cluster %s (30 minutes timeout until %s, 5s timeout on oc command)' % (cluster_name, datetime.datetime.fromtimestamp(oc_login_time + 30 * 60)))
+            start_json = stdout.find("{")
             while datetime.datetime.utcnow().timestamp() < oc_login_time + 30 * 60:
                 if force_terminate:
                     logging.error("Exiting cluster access process for %s cluster after capturing Ctrl-C" % cluster_name)
                     return return_data
-                oc_login_cmnd = ["oc", "login", json.loads(stdout)['api_url'], "--username", json.loads(stdout)['username'], "--password", json.loads(stdout)['password'], "--kubeconfig", my_path + "/kubeconfig", "--insecure-skip-tls-verify=true", "--request-timeout=30s"]
+                oc_login_cmnd = ["oc", "login", json.loads(stdout[start_json:])['api_url'], "--username", json.loads(stdout[start_json:])['username'], "--password", json.loads(stdout[start_json:])['password'], "--kubeconfig", my_path + "/kubeconfig", "--insecure-skip-tls-verify=true", "--request-timeout=30s"]
                 logging.debug(oc_login_cmnd)
                 process_oc_login = subprocess.Popen(oc_login_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
                 stdout_oc_login, stderr_oc_login = process_oc_login.communicate()
@@ -1516,7 +1518,8 @@ def main():
     try:
         while (loop_counter < args.cluster_count):
             if force_terminate:
-                logging.warning("Not creating cluster %s after Capturing Ctrl-C" % cluster_name_seed + "-" + str(loop_counter).zfill(4))
+                logging.warning("Not creating cluster %s after Capturing Ctrl-C" % (cluster_name_seed + "-" + str(loop_counter).zfill(4)))
+                loop_counter += 1
             else:
                 create_cluster = False
                 if args.batch_size != 0:
