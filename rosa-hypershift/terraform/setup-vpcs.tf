@@ -31,7 +31,7 @@ provider "aws" {
 module "vpc" {
   count   = var.cluster_count
   source  = "terraform-aws-modules/vpc/aws"
-  version = "4.0.2"
+  version = "5.0.0"
   azs     = local.selected_azs
   name    = "vpc-${var.cluster_name_seed}-${format("%04d", count.index + 1)}"
   cidr    = "10.0.0.0/16"
@@ -44,6 +44,11 @@ module "vpc" {
   one_nat_gateway_per_az = true
   enable_dns_hostnames   = true
   enable_dns_support     = true
+}
+
+resource "aws_eip" "nat" {
+  domain = "vpc"
+  depends_on = [module.vpc]
 }
 
 output "vpc-id" {
