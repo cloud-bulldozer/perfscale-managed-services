@@ -129,11 +129,11 @@ machinepoolParser.add_argument(
     '--machinepool-replicas',
     type=int,
     default=3,
-    help='Number of hosts to create on the machinepool. Default: 3')
+    help='Number of nodes to create on the machinepool. Default: 3')
 machinepoolParser.add_argument(
     '--machinepool-wait-time',
     type=int,
-    help='Waiting time in seconds for hosts to come up')
+    help='Waiting time in seconds for nodes to come up')
 
 logParser = argparse.ArgumentParser(add_help=False)
 logParser.add_argument(

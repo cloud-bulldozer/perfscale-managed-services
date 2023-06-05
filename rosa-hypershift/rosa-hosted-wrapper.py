@@ -1331,6 +1331,7 @@ def main():
         logfile.setFormatter(log_format)
         logger.addHandler(logfile)
         logging.info('Logging to file: %s' % args.log_file)
+
     else:
         logging.info('Logging to console')
 
