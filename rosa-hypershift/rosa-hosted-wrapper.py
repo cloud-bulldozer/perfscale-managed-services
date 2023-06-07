@@ -660,7 +660,13 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
     logging.debug('Attempting cluster installation')
     logging.debug('Output directory set to %s' % cluster_path)
     cluster_name = cluster_name_seed + "-" + str(my_inc).zfill(4)
-    cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, "--replicas", str(worker_nodes), "--hosted-cp", "--sts", "--mode", "auto", "-y", "--output", "json", "--oidc-config-id", oidc_config_id]
+    git_user = _get_git_repo_details()
+    if git_user != "cloud-bulldozer":
+        GITHUB_USERNAME = git_user
+    else:
+        GITHUB_USERNAME = "cloud-bulldozer"
+
+    cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, f"--tags=User:{GITHUB_USERNAME}", "--replicas", str(worker_nodes), "--hosted-cp", "--sts", "--mode", "auto", "-y", "--output", "json", "--oidc-config-id", oidc_config_id]
     if create_vpc:
         cluster_cmd.append("--subnet-ids")
         cluster_cmd.append(vpc_info[1])
@@ -1103,6 +1109,16 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
         all_clusters_installed.notify_all()
     logging.info('Watcher terminated')
 
+def _get_git_repo_details():
+    # Get the Git remote URL for the current working directory
+    command = ['git', 'config', '--get', 'remote.origin.url']
+    result = subprocess.run(command, capture_output=True, text=True)
+    git_repo_url = result.stdout.strip()
+
+    if git_repo_url.startswith('https://github.com/'):
+        git_path = git_repo_url[len('https://github.com/'):]
+        git_user = git_path.split('/')[0]
+        return git_user
 
 def _cleanup_cluster(rosa_cmnd, cluster_name, my_path, my_uuid, es, index, index_retry):
     cluster_path = my_path + "/" + cluster_name
