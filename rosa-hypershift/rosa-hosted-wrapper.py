@@ -1111,9 +1111,13 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
 
 def _get_git_repo_details():
     # Get the Git remote URL for the current working directory
+    old_wd = os.getcwd()
+    current_wd = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(current_wd)
     command = ['git', 'config', '--get', 'remote.origin.url']
     result = subprocess.run(command, capture_output=True, text=True)
     git_repo_url = result.stdout.strip()
+    os.chdir(old_wd)
 
     if git_repo_url.startswith('https://github.com/'):
         git_path = git_repo_url[len('https://github.com/'):]
