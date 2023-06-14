@@ -127,9 +127,13 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
     return (ocm_cmnd, rosa_cmnd)
 
 
-def _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path):
+def _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path, tagging):
     logging.info('Creating OIDC Provider')
-    oidc_code, oidc_out, oidc_err = common._subprocess_exec(rosa_cmnd + ' create oidc-config --mode=auto --managed=false --prefix ' + cluster_name_seed + ' -y', my_path + '/oidc_config_id_gen.log')
+    oidc_command = [ ' create oidc-config --mode=auto --managed=false --prefix ' + cluster_name_seed + ' -y', my_path + '/oidc_config_id_gen.log' ]
+    if tagging:
+        oidc_command.append("--tags={}".format(tagging))
+
+    oidc_code, oidc_out, oidc_err = common._subprocess_exec(rosa_cmnd + oidc_command)
     sys.exit('Exiting...') if oidc_code != 0 else logging.info('OIDC Provided created')
     # the rosa cli output does not give us the OIDC Provider ID so we need to scrape it after
     logging.info('Obtaining OIDC Providers List')
@@ -200,9 +204,13 @@ def _get_mgmt_cluster(sc_kubeconfig, cluster_id, cluster_name):
     return 1
 
 
-def _gen_operator_roles(rosa_cmnd, cluster_name_seed, my_path, oidc_id, installer_role_arn):
+def _gen_operator_roles(rosa_cmnd, cluster_name_seed, my_path, oidc_id, installer_role_arn, tagging):
     logging.info("Creating Operator Roles")
-    roles_code, roles_out, roles_err = common._subprocess_exec(rosa_cmnd + ' create operator-roles --prefix ' + cluster_name_seed + ' -m auto -y --hosted-cp --oidc-config-id ' + oidc_id + ' --installer-role-arn ' + installer_role_arn, my_path + "/rosa_create_operator_roles.log")
+    roles_cmnd = [' create operator-roles --prefix ' + cluster_name_seed + ' -m auto -y --hosted-cp --oidc-config-id ' + oidc_id + ' --installer-role-arn ' + installer_role_arn, my_path + "/rosa_create_operator_roles.log"]
+    if tagging:
+        roles_cmnd.append("--tags={}".format(tagging))
+
+    roles_code, roles_out, roles_err = common._subprocess_exec(rosa_cmnd + roles_cmnd)
     sys.exit('Exiting...') if roles_code != 0 else logging.info('Operator Roles Created')
     return True
 
@@ -514,20 +522,14 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
     return 0
 
 
-def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, service_cluster_name, sc_kubeconfig, all_clusters_installed, oidc_config_id, workload_type, kube_burner_version, e2e_git_details, git_branch, operator_roles_prefix):
+def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, service_cluster_name, sc_kubeconfig, all_clusters_installed, oidc_config_id, workload_type, kube_burner_version, e2e_git_details, git_branch, operator_roles_prefix, tagging):
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
     os.mkdir(cluster_path)
     logging.debug('Attempting cluster installation')
     logging.debug('Output directory set to %s' % cluster_path)
     cluster_name = cluster_name_seed + "-" + str(my_inc).zfill(4)
-    git_user = _get_git_repo_details()
-    if git_user != "cloud-bulldozer":
-        GITHUB_USERNAME = git_user
-    else:
-        GITHUB_USERNAME = "cloud-bulldozer"
-
-    cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, f"--tags=User:{GITHUB_USERNAME}", "--replicas", str(worker_nodes), "--hosted-cp", "--sts", "--mode", "auto", "-y", "--output", "json", "--oidc-config-id", oidc_config_id]
+    cluster_cmd = [rosa_cmnd, "create", "cluster", "--cluster-name", cluster_name, "--replicas", str(worker_nodes), "--hosted-cp", "--sts", "--mode", "auto", "-y", "--output", "json", "--oidc-config-id", oidc_config_id]
     if create_vpc:
         cluster_cmd.append("--subnet-ids")
         cluster_cmd.append(vpc_info[1])
@@ -540,6 +542,8 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
     if operator_roles_prefix:
         cluster_cmd.append("--operator-roles-prefix")
         cluster_cmd.append(cluster_name_seed)
+    logging.debug(cluster_cmd)
+    installation_log = open(cluster_path + "/" + 'installation.log', 'w')
     cluster_start_time = int(time.time())
     logging.info("Trying to install %s cluster with %d workers up to 5 times" % (cluster_name, worker_nodes))
     metadata = {}
@@ -601,7 +605,8 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
                                   args.machinepool_flavour,
                                   args.machinepool_labels,
                                   args.machinepool_taints,
-                                  args.machinepool_replicas)
+                                  args.machinepool_replicas,
+                                  tagging)
             metadata['workers_ready'] = ""
             metadata['extra_pool_workers_ready'] = ""
             if wait_time != 0:
@@ -733,7 +738,7 @@ def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name, machine
     return result
 
 
-def _add_machinepools(rosa_cmnd, kubeconfig, metadata, machinepool_name, machinepool_flavour, machinepool_labels, machinepool_taints, machinepool_replicas):
+def _add_machinepools(rosa_cmnd, kubeconfig, metadata, machinepool_name, machinepool_flavour, machinepool_labels, machinepool_taints, machinepool_replicas, tagging):
     logging.info('Creating %d machinepools %s-ID on %s, one per AWS Zone' % (len(metadata['zones']), machinepool_name, metadata['cluster_name']))
     machines_per_zone = machinepool_replicas // len(metadata['zones'])
     extra_machines = machinepool_replicas % len(metadata['zones'])
@@ -752,8 +757,10 @@ def _add_machinepools(rosa_cmnd, kubeconfig, metadata, machinepool_name, machine
             machinepool_cmd.append("--labels")
             machinepool_cmd.append(machinepool_labels)
         if machinepool_taints:
-            machinepool_cmd.append("--tains")
+            machinepool_cmd.append("--taints")
             machinepool_cmd.append(machinepool_taints)
+        if tagging:
+            machinepool_cmd.append("--tags={}".format(tagging))
         machinepool_code, machinepool_out, machinepool_err = common._subprocess_exec(' '.join(str(x) for x in machinepool_cmd))
         if machinepool_code != 0:
             logging.error('Unable to create machinepool %s on %s' % (machinepool_name + "-" + id, metadata['cluster_name']))
@@ -914,21 +921,6 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
         all_clusters_installed.notify_all()
     logging.info('Watcher terminated')
 
-def _get_git_repo_details():
-    # Get the Git remote URL for the current working directory
-    old_wd = os.getcwd()
-    current_wd = os.path.dirname(os.path.abspath(__file__))
-    os.chdir(current_wd)
-    command = ['git', 'config', '--get', 'remote.origin.url']
-    result = subprocess.run(command, capture_output=True, text=True)
-    git_repo_url = result.stdout.strip()
-    os.chdir(old_wd)
-
-    if git_repo_url.startswith('https://github.com/'):
-        git_path = git_repo_url[len('https://github.com/'):]
-        git_user = git_path.split('/')[0]
-        return git_user
-
 def _cleanup_cluster(rosa_cmnd, cluster_name, my_path, my_uuid, es, index, index_retry):
     cluster_path = my_path + "/" + cluster_name
     metadata = get_metadata(cluster_name, rosa_cmnd)
@@ -970,6 +962,12 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, my_path, my_uuid, es, index, index
         es_ignored_metadata = ""
         common._index_result(es, index, metadata, es_ignored_metadata, index_retry)
 
+def parse_extra_tags(s):
+    tags = {}
+    for tag in s.split():
+        key, value = tag.split(':')
+        tags[key] = value
+    return tags
 
 def main():
     parser = argparse.ArgumentParser(description="hypershift wrapper script",
@@ -1111,6 +1109,13 @@ def main():
         type=str,
         help='Specify a desired branch of the corresponding git',
         default='master')
+    parser.add_argument(
+        '--extra-tags',
+        type=parse_extra_tags,
+        required=True,
+        default={'default_key': 'default_value'},
+        help='Supply tag information as key-value pairs separated by spaces'
+    )
 
 # Delete following parameter and code when default security group wont be used
     parser.add_argument(
@@ -1256,6 +1261,9 @@ def main():
         logging.info('`rosa login` execution OK')
         logging.debug(rosa_out.strip().decode("utf-8"))
 
+    if args.extra_tagging is not None:
+        tagging = args.extra_tagging
+
     service_cluster = ""
     if args.provision_shard:
         service_cluster = _verify_provision_shard(ocm_cmnd, args.provision_shard)
@@ -1267,13 +1275,13 @@ def main():
             logging.error('Provided oidc-config-id %s is not found in ROSA account' % oidc_config_id)
             sys.exit('Exiting...')
     else:
-        oidc_config_id = _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path)
+        oidc_config_id = _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path, tagging)
         oidc_cleanup = True
 
     operator_roles_prefix = ""
     if args.common_operator_roles:
         installer_role_arn = _find_installer_role_arn(rosa_cmnd, my_path)
-        roles_created = _gen_operator_roles(rosa_cmnd, cluster_name_seed, my_path, oidc_config_id, installer_role_arn)
+        roles_created = _gen_operator_roles(rosa_cmnd, cluster_name_seed, my_path, oidc_config_id, installer_role_arn, tagging)
         operator_roles_prefix = cluster_name_seed if roles_created else ""
 
     # Get connected to the Service Cluster
@@ -1347,7 +1355,7 @@ def main():
                         vpc_info = vpcs[(loop_counter - 1) % len(vpcs)]
                         logging.debug("Creating cluster on VPC %s, with subnets: %s" % (vpc_info[0], vpc_info[1]))
                     try:
-                        thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.provision_shard, args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, service_cluster, sc_kubeconfig_path, all_clusters_installed, oidc_config_id, args.workload_type, args.kube_burner_version, args.e2e_git_details, args.git_branch, operator_roles_prefix))
+                        thread = threading.Thread(target=_build_cluster, args=(ocm_cmnd, rosa_cmnd, cluster_name_seed, args.must_gather_all, args.provision_shard, args.create_vpc, vpc_info, args.workers_wait_time, args.add_cluster_load, args.cluster_load_duration, jobs, workers, my_path, my_uuid, loop_counter, es, args.es_url, args.es_index, args.es_index_retry, service_cluster, sc_kubeconfig_path, all_clusters_installed, oidc_config_id, args.workload_type, args.kube_burner_version, args.e2e_git_details, args.git_branch, operator_roles_prefix, tagging))
                     except Exception as err:
                         logging.error(err)
                     cluster_thread_list.append(thread)

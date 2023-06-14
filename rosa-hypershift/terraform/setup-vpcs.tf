@@ -10,6 +10,13 @@ variable "cluster_name_seed" {
   default     = "rosa-cluster"
 }
 
+variable "GITHUB_USERNAME"{
+  type        = map(string)
+  description = "The tags, to assign with the VPCs"
+  default     = {
+    User = "cloud-bulldozer"
+  }
+}
 variable "aws_region" {
   type        = string
   description = "The region to create the ROSA cluster in"
@@ -45,11 +52,14 @@ module "vpc" {
   enable_dns_hostnames          = true
   enable_dns_support            = true
   manage_default_security_group = false
+
+  tags = var.tags
 }
 
 resource "aws_eip" "nat" {
   domain = "vpc"
   depends_on = [module.vpc]
+  tags       = var.tags
 }
 
 output "vpc-id" {
