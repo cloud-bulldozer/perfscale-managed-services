@@ -245,17 +245,18 @@ def _verify_terraform(terraform_cmnd, my_path):
     return terraform_cmnd
 
 
-def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, aws_region):
+def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, aws_region, tagging):
     logging.info('Initializing Terraform with: terraform init')
     terraform_code, terraform_out, terraform_err = common._subprocess_exec(terraform + " init", my_path + '/terraform/terraform-version.log', {'cwd': my_path + '/terraform'})
     if terraform_code == 0:
-        logging.info('Applying terraform plan command with: terraform apply for %s VPC(s), using %s as name seed on %s' % (cluster_count, cluster_name_seed, aws_region))
+        logging.info('Applying terraform plan command with: terraform apply for %s VPC(s), using %s as name seed on %s and tags %s' % (cluster_count, cluster_name_seed, aws_region, tagging))
         for trying in range(1, retries + 1):
             logging.info('Try: %d. Starting terraform apply' % trying)
             myenv = os.environ.copy()
             myenv["TF_VAR_cluster_name_seed"] = cluster_name_seed
             myenv["TF_VAR_cluster_count"] = str(cluster_count)
             myenv["TF_VAR_aws_region"] = aws_region
+            myenv["TF_VAR_tagging"] = tagging
             apply_code, apply_out, apply_err = common._subprocess_exec(terraform + " apply --auto-approve", my_path + '/terraform/terraform-apply.log', {'cwd': my_path + '/terraform', 'env': myenv})
             if apply_code == 0:
                 logging.info('Applied terraform plan command with: terraform apply')

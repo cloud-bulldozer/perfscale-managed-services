@@ -10,7 +10,7 @@ variable "cluster_name_seed" {
   default     = "rosa-cluster"
 }
 
-variable "GITHUB_USERNAME"{
+variable "tagging"{
   type        = map(string)
   description = "The tags, to assign with the VPCs"
   default     = {
