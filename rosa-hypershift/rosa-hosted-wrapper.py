@@ -570,8 +570,6 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
             mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster_name, es, index, index_retry, uuid) if mgmt_cluster_name else None
             mgmt_kubeconfig_path = _download_kubeconfig(ocm_cmnd, mgmt_metadata['cluster_id'], cluster_path, "mgmt") if mgmt_cluster_name else None
             mc_namespace_timing = _namespace_wait(mgmt_kubeconfig_path, metadata['cluster_id'], cluster_name, "Management") - cluster_start_time if mgmt_kubeconfig_path else 0
-            watch_cmd = [rosa_cmnd, "logs", "install", "-c", cluster_name, "--watch"]
-            logging.debug(watch_cmd)
             watch_code, watch_out, watch_err = common._subprocess_exec(rosa_cmnd + " logs install -c " + cluster_name + " --watch", cluster_path + "/installation.log", {'preexec_fn': disable_signals})
             cluster_end_time = int(time.time())
             metadata = get_metadata(cluster_name, rosa_cmnd)
@@ -603,7 +601,6 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
                     futures = [wait_executor.submit(_wait_for_workers, kubeconfig, worker_nodes, wait_time, cluster_name, "workers"), ]
                     futures.append(wait_executor.submit(_wait_for_workers, kubeconfig, args.machinepool_replicas, wait_time, cluster_name, args.machinepool_name)) if args.machinepool_name else None
                     for future in concurrent.futures.as_completed(futures):
-                        logging.debug(future)
                         result = future.result()
                         if result[0] == "workers":
                             default_pool_workers = int(result[1])
@@ -620,6 +617,11 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
                         logging.error("Insufficient number of workers on extra machinepool %s (%d). Expected: %d. Disabling e2e-benchmarking execution on %s" % (args.machinepool_name, extra_pool_workers, args.machinepool_replicas, cluster_name))
                         cluster_load = False
                         metadata['status'] = "Ready. Not enough workers on extra pool"
+                    elif args.machinepool_labels and "node-role.kubernetes.io/infra" in args.machinepool_labels:
+                        # Extra workers are all ready at this point, so checking if it is a infra pool to rebalance services.
+                        logging.info("Additional infra machinepool detected. Attempting to rebalance infrastructure components")
+                        # Cluster Load is disabled if we failed to  rebalance
+                        cluster_load = _rebalance_infra(kubeconfig, cluster_name)
                 else:
                     logging.info("All workers ready, executing e2e-benchmarking on %s" % cluster_name)
             break
@@ -656,6 +658,72 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
         logging.info("Saving must-gather file of hosted cluster %s" % cluster_name)
         _get_must_gather(cluster_path, cluster_name)
         _get_mgmt_cluster_must_gather(mgmt_kubeconfig_path, my_path)
+
+
+def _rebalance_infra(kubeconfig, cluster_name):
+    load_env = os.environ.copy()
+    load_env["KUBECONFIG"] = kubeconfig
+    # First wait for stateful set to be created
+    starting_time = datetime.datetime.utcnow().timestamp()
+    logging.debug("Waiting 10 minutes for prometheus stateful set to be created cluster %s until %s" % (cluster_name, datetime.datetime.fromtimestamp(starting_time + 10 * 60)))
+    while datetime.datetime.utcnow().timestamp() < starting_time + 10 * 60:
+        if force_terminate:
+            logging.error("Exiting rebalancing infra on the cluster %s after capturing Ctrl-C" % cluster_name)
+            return False
+        sts_code, sts_out, sts_err = common._subprocess_exec("oc get sts prometheus-k8s -n openshift-monitoring", extra_params={'env': load_env}, log_output=False)
+        if sts_code != 0:
+            logging.debug("Prometheus stateful set not created on cluster %s. Waiting 10 seconds for next check" % cluster_name)
+            time.sleep(10)
+        else:
+            logging.debug("Found Prometheus stateful set on cluster %s" % cluster_name)
+            rollout_code, rollout_out, rollout_err = common._subprocess_exec("oc rollout restart statefulset/prometheus-k8s -n openshift-monitoring", extra_params={'env': load_env})
+            if rollout_code != 0:
+                logging.warning("Failed to execute rollout command for HC infrastructure on %s. Waiting 10 secodns for the next check" % cluster_name)
+                time.sleep(10)
+            else:
+                status_code, status_out, status_err = common._subprocess_exec("oc rollout status statefulset/prometheus-k8s -n openshift-monitoring --timeout 120s", extra_params={'env': load_env})
+                if status_code == 0:
+                    logging.info("Moved infrastructure components on cluster %s." % cluster_name)
+                    infra_check = _check_balanced_infra(kubeconfig, cluster_name)
+                    if infra_check:
+                        logging.debug("Prometheus pods placed on infra nodes on clusters %s" % cluster_name)
+                        return True
+                    else:
+                        logging.warning("Rollout finished ok but Prometheus pods are not in Infra nodes on %s cluster. Retrying in 10 seconds" % cluster_name)
+                        time.sleep(10)
+                else:
+                    logging.warning("Failed to move infrastructure components on %s. Retrying in 5 seconds" % cluster_name)
+                    time.sleep(5)
+    logging.error("Faile to place prometheus pods on infra nodes after 10 minutes on cluster %s" % cluster_name)
+    return False
+
+
+def _check_balanced_infra(kubeconfig, cluster_name):
+    load_env = os.environ.copy()
+    load_env["KUBECONFIG"] = kubeconfig
+    logging.debug("Verifying that prometheus pods are running on infra nodes")
+    infra_code, infra_out, infra_err = common._subprocess_exec("oc get nodes -o json", extra_params={'env': load_env, 'universal_newlines': True})
+    try:
+        nodes_json = json.loads(infra_out)
+    except Exception as err:
+        logging.debug("Cannot load command result for cluster %s" % cluster_name)
+        logging.debug(err)
+        return 0
+    nodes = nodes_json['items'] if 'items' in nodes_json else []
+    infra_nodes = []
+    for node in nodes:
+        if node.get('metadata', {}).get('labels', {}).get('node-role.kubernetes.io/infra'):
+            infra_nodes.append(node.get('metadata', {}).get('name', ""))
+    prom_code, prom_out, prom_err = common._subprocess_exec("oc get pods -l app.kubernetes.io/name=prometheus -o wide -o custom-columns='NODE:.spec.nodeName' --no-headers=true", extra_params={'env': load_env, 'universal_newlines': True})
+    if prom_code != 0:
+        return False
+    else:
+        for prom_node in prom_out.splitlines():
+            if prom_node not in infra_nodes:
+                logging.debug("Prometheus pod placed in a wrong node on clusters %s" % cluster_name)
+                return False
+        logging.debug("All prometheus pods placed on infra nodes on cluster %s" % cluster_name)
+        return True
 
 
 def _get_workers_ready(kubeconfig, cluster_name):
@@ -750,7 +818,7 @@ def _add_machinepools(rosa_cmnd, kubeconfig, metadata, machinepool_name, machine
             machinepool_cmd.append(machinepool_taints)
         machinepool_code, machinepool_out, machinepool_err = common._subprocess_exec(' '.join(str(x) for x in machinepool_cmd))
         if machinepool_code != 0:
-            logging.error('Unable to create machinepool %s on %s' % (machinepool_name + "-" + id, metadata['cluster_name']))
+            logging.error('Unable to create machinepool %s on %s' % (machinepool_name + "-" + str(id), metadata['cluster_name']))
 
 
 def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, jobs, es_url, mgmt_kubeconfig, workload_type, kube_burner_version, e2e_git_details, git_branch):
@@ -1036,6 +1104,10 @@ def main():
         default=0,
         help='Percentage of variation of jobs to execute. Job iterations will be a number from jobs_per_worker * workers * (-X%% to +X%%)')
     parser.add_argument(
+        '--cluster-load-job-iterations',
+        type=int,
+        help='Set the specific number of job iterations for a cluster workload. NOTE: If this is set the parameters --cluster-load-jobs-per-worker and --cluster-load-job-variation will be ignored')
+    parser.add_argument(
         '--workers-wait-time',
         type=int,
         default=60,
@@ -1160,6 +1232,11 @@ def main():
                 logging.error("Invalid value for parameter \"--workers %s\". Value %s must be divisible by 3" % (args.workers, num))
                 exit(1)
     logging.info("Workers parameter \"--workers %s\" validated" % args.workers)
+
+    pattern = re.compile(r"^([a-zA-Z0-9/.-]+=[a-zA-Z0-9/.-]*|([a-zA-Z0-9/.-]+=)?)(,[a-zA-Z0-9/.-]+=[a-zA-Z0-9/.-]*|,[a-zA-Z0-9/.-]+=)*$")
+    if args.machinepool_labels and not re.match(pattern, args.machinepool_labels):
+        logging.error("Detected invalid pattern on --machinepool-label %s argument, It must be a list of X=Y (or X=) values" % args.machinepool_labels)
+        exit(1)
 
     if os.path.exists(args.aws_account_file):
         logging.info('AWS account file found. Loading account information')
@@ -1316,9 +1393,12 @@ def main():
                     else:
                         workers = int(args.workers.split(",")[(loop_counter - 1) % len(args.workers.split(","))])
                     if args.add_cluster_load:
-                        low_jobs = max(0, int((args.cluster_load_jobs_per_worker * workers) - (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100)))
-                        high_jobs = int((args.cluster_load_jobs_per_worker * workers) + (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100))
-                        jobs = random.randint(low_jobs, high_jobs)
+                        if args.cluster_load_job_iterations:
+                            jobs = args.cluster_load_job_iterations
+                        else:
+                            low_jobs = max(0, int((args.cluster_load_jobs_per_worker * workers) - (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100)))
+                            high_jobs = int((args.cluster_load_jobs_per_worker * workers) + (float(args.cluster_load_job_variation) * float(args.cluster_load_jobs_per_worker * workers) / 100))
+                            jobs = random.randint(low_jobs, high_jobs)
                         logging.debug("Selected jobs: %d" % jobs)
                     else:
                         jobs = 0
