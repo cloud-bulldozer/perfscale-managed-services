@@ -35,6 +35,7 @@ import concurrent.futures
 from git import Repo
 from libs import common
 from libs import parentParsers
+from utils import jira_apis
 
 
 def set_force_terminate(signum, frame):
@@ -673,6 +674,9 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
     if operator_roles_prefix:
         cluster_cmd.append("--operator-roles-prefix")
         cluster_cmd.append(cluster_name_seed)
+    if args.ticket_id:
+        jira_apis.verify_issue_id(args.ticket_id)
+        cluster_cmd.append("--tags=TicketId:{}.format(args.ticket_id")
     logging.debug(cluster_cmd)
     installation_log = open(cluster_path + "/" + 'installation.log', 'w')
     cluster_start_time = int(time.time())
@@ -1302,6 +1306,12 @@ def main():
         type=str,
         help='Specify a desired branch of the corresponding git',
         default='master')
+    parser.add_argument(
+        '--ticket_id',
+        type=str,
+        help='Approved Ticket ID for cloud-spend',
+        required=False
+    )
 
 # Delete following parameter and code when default security group wont be used
     parser.add_argument(
