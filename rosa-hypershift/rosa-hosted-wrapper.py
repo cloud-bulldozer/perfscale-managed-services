@@ -538,8 +538,6 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
     if args.ticket_id:
         jira_apis.verify_issue_id(args.ticket_id)
         cluster_cmd.append("--tags=TicketId:{}.format(args.ticket_id")
-    logging.debug(cluster_cmd)
-    installation_log = open(cluster_path + "/" + 'installation.log', 'w')
     cluster_start_time = int(time.time())
     logging.info("Trying to install %s cluster with %d workers up to 5 times" % (cluster_name, worker_nodes))
     metadata = {}
