@@ -83,16 +83,11 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
             rosa_cmnd = my_path + "/rosa"
         except urllib.error.HTTPError as err:
             logging.error('Failed to download valid version %s from GitHub: %s' % (version, err))
-            exit(1)
+            sys.exit('Exiting...')
     logging.info('Testing rosa command with: rosa -h')
-    rosa_cmd = [rosa_cmnd, "-h"]
-    rosa_process = subprocess.Popen(rosa_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    rosa_stdout, rosa_stderr = rosa_process.communicate()
-    if rosa_process.returncode != 0:
-        logging.error('%s unable to execute -h' % rosa_cmnd)
-        logging.error(rosa_stderr.strip().decode("utf-8"))
-        exit(1)
-    logging.info('rosa command validated with -h. Directory is %s' % my_path)
+    (rosa_code, rosa_out, rosa_err) = common._subprocess_exec(rosa_cmnd + " -h")
+    sys.exit('Exiting...') if rosa_code != 0 else logging.info(f'rosa command validated with -h and saved on {my_path}/rosa')
+
     if ocm_cmnd is None:
         logging.info('ocm command not provided')
         logging.info('Downloading binary ocm from https://github.com/openshift-online/ocm-cli/releases/')
@@ -128,82 +123,50 @@ def _verify_cmnds(ocm_cmnd, rosa_cmnd, my_path, ocm_version, rosa_version):
             logging.error('Failed to download valid version %s from GitHub: %s' % (version, err))
             exit(1)
     logging.info('Testing ocm command with: ocm -h')
-    ocm_cmd = [ocm_cmnd, "-h"]
-    ocm_process = subprocess.Popen(ocm_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    ocm_stdout, ocm_stderr = ocm_process.communicate()
-    if ocm_process.returncode != 0:
-        logging.error('%s unable to execute -h' % ocm_cmnd)
-        logging.error(ocm_stderr.strip().decode("utf-8"))
-        exit(1)
-    logging.info('ocm command validated with -h. Directory is %s' % my_path)
+    (ocm_code, ocm_out, ocm_err) = common._subprocess_exec(ocm_cmnd + " -h")
+    sys.exit('Exiting...') if ocm_code != 0 else logging.info(f'ocm command validated with -h and saved on {my_path}/ocm')
     return (ocm_cmnd, rosa_cmnd)
 
 
 def _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path):
     logging.info('Creating OIDC Provider')
-    oidc_gen_cmd = [rosa_cmnd, 'create', 'oidc-config', '--mode=auto', '--managed=false', '--prefix', cluster_name_seed, '-y']
-    logging.debug(oidc_gen_cmd)
-    oidc_gen_log = open(my_path + "/" + 'oidc_config_id_gen.log', 'w')
-    oidc_gen_process = subprocess.Popen(oidc_gen_cmd, stdout=oidc_gen_log, stderr=oidc_gen_log)
-    oidc_gen_stdout, oidc_gen_stderr = oidc_gen_process.communicate()
-    if oidc_gen_process.returncode != 0:
-        logging.error('Unable to generate OIDC Provider. Please check logfile %s' % my_path + "/" + 'oidc_config_id_gen.log')
-        exit(1)
+    oidc_code, oidc_out, oidc_err = common._subprocess_exec(rosa_cmnd + ' create oidc-config --mode=auto --managed=false --prefix ' + cluster_name_seed + ' -y', my_path + '/oidc_config_id_gen.log')
+    sys.exit('Exiting...') if oidc_code != 0 else logging.info('OIDC Provided created')
     # the rosa cli output does not give us the OIDC Provider ID so we need to scrape it after
-    oidc_get_cmd = [rosa_cmnd, 'list', 'oidc-config', '-o', 'json']
-    oidc_get_process = subprocess.Popen(oidc_get_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    oidc_get_stdout, oidc_get_stderr = oidc_get_process.communicate()
-    if oidc_get_process.returncode != 0:
-        logging.error('rosa list oidc-config -o json command returned an error. Exiting...')
-        logging.error(oidc_get_stderr.strip().decode("utf-8"))
-        exit(1)
-    for oidc_item in json.loads(oidc_get_stdout.decode("utf-8")):
+    logging.info('Obtaining OIDC Providers List')
+    oidc_get_code, oidc_get_out, oidc_get_err = common._subprocess_exec(rosa_cmnd + ' list oidc-config -o json')
+    sys.exit('Exiting...') if oidc_get_code != 0 else logging.info('OIDC Providers List obtained')
+    for oidc_item in json.loads(oidc_get_out.decode("utf-8")):
         if cluster_name_seed in oidc_item['issuer_url']:
             logging.info('OIDC Provider found. ID is %s' % oidc_item['id'])
             return oidc_item['id']
     logging.error('OIDC ID not found in rosa list oidc-config for cluster name seed %s' % cluster_name_seed)
-    logging.error(oidc_get_stdout.strip().decode("utf-8"))
-    exit(1)
+    logging.error(oidc_get_out.strip().decode("utf-8"))
+    sys.exit('Exiting...')
 
 
 def _verify_oidc_config_id(oidc_config_id, rosa_cmnd, my_path):
     logging.info('Verifying %s is in list of OIDC Providers' % oidc_config_id)
-    oidc_verify_cmd = [rosa_cmnd, 'list', 'oidc-config', '-o', 'json']
-    oidc_verify_process = subprocess.Popen(oidc_verify_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    oidc_verify_stdout, oidc_verify_stderr = oidc_verify_process.communicate()
-    if oidc_verify_process.returncode != 0:
-        logging.error('rosa list oidc-config -o json command returned an error. Exiting...')
-        return False
-    for oidc_id in json.loads(oidc_verify_stdout.decode("utf-8")):
-        if oidc_id['id'] == oidc_config_id:
-            logging.info('Found OIDC ID %s' % oidc_config_id)
-            return True
-    logging.error('OIDC ID %s not found in rosa list oidc-config' % oidc_config_id)
-    logging.error(oidc_verify_stdout.strip().decode("utf-8"))
+    oidc_code, oidc_out, oidc_err = common._subprocess_exec(rosa_cmnd + ' list oidc-config -o json')
+    if oidc_code == 0:
+        for oidc_id in json.loads(oidc_out.decode("utf-8")):
+            if oidc_id['id'] == oidc_config_id:
+                logging.info('Found OIDC ID %s' % oidc_config_id)
+                return True
+        logging.error('OIDC ID %s not found in rosa list oidc-config' % oidc_config_id)
     return False
 
 
 def _verify_provision_shard(ocm_cmnd, shard_id):
     logging.info('Verifing Shard ID: %s' % shard_id)
-    ocm_command = [ocm_cmnd, "get", "/api/clusters_mgmt/v1/provision_shards/" + shard_id]
-    logging.debug(ocm_command)
-    ocm_process = subprocess.Popen(ocm_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    ocm_stdout, ocm_stderr = ocm_process.communicate()
-    if ocm_process.returncode != 0:
-        logging.error(ocm_stdout.strip().decode("utf-8"))
-        logging.error(ocm_stderr.strip().decode("utf-8"))
-        logging.error('%s unable to execute. Exiting...' % ocm_command)
-        exit(1)
-    else:
-        if json.loads(ocm_stdout.decode("utf-8")).get('hypershift_config', {}).get('server', {}) and json.loads(ocm_stdout.decode("utf-8")).get('status', {}) in ('ready', 'maintenance'):
+    shard_code, shard_out, shard_err = common._subprocess_exec(ocm_cmnd + " get /api/clusters_mgmt/v1/provision_shards/" + shard_id)
+    if shard_code == 0:
+        if json.loads(shard_out.decode("utf-8")).get('hypershift_config', {}).get('server', {}) and json.loads(shard_out.decode("utf-8")).get('status', {}) in ('ready', 'maintenance'):
             # hypershift_config.server is the service cluster, like https: // api.hs-sc-0vfs0cl5g.wqrn.s1.devshift.org: 6443. split('.')[1] will return hs-sc-0vfs0cl5g
-            logging.info("Identified Service Cluster %s for Shard ID %s" % (json.loads(ocm_stdout.decode("utf-8"))['hypershift_config']['server'].split('.')[1], shard_id))
-            return json.loads(ocm_stdout.decode("utf-8"))['hypershift_config']['server'].split('.')[1]
-        else:
-            logging.error(ocm_stdout.strip().decode("utf-8"))
-            logging.error(ocm_stderr.strip().decode("utf-8"))
-            logging.error('Invalid Provision Shard %s. Exiting...' % shard_id)
-            exit(1)
+            logging.info("Identified Service Cluster %s for Shard ID %s" % (json.loads(shard_out.decode("utf-8"))['hypershift_config']['server'].split('.')[1], shard_id))
+            return json.loads(shard_out.decode("utf-8"))['hypershift_config']['server'].split('.')[1]
+    logging.error('Invalid Provision Shard %s. Exiting...' % shard_id)
+    sys.exit('Exiting...')
 
 
 def _get_mgmt_cluster(sc_kubeconfig, cluster_id, cluster_name):
@@ -211,29 +174,25 @@ def _get_mgmt_cluster(sc_kubeconfig, cluster_id, cluster_name):
     logging.info('Getting Management Cluster assigned for %s' % cluster_name)
     myenv = os.environ.copy()
     myenv["KUBECONFIG"] = sc_kubeconfig
-    oc_cmnd = ["oc", "get", "managedclusters", cluster_id, "-o", "json"]
-    logging.debug(oc_cmnd)
     logging.info("Waiting 15 minutes until %s for Management Cluster to be assigned to Hosted Cluster %s" % (cluster_name, datetime.datetime.fromtimestamp(starting_time + 15 * 60)))
     while datetime.datetime.utcnow().timestamp() < starting_time + 15 * 60:
-        oc_process = subprocess.Popen(oc_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=myenv)
-        oc_stdout, oc_stderr = oc_process.communicate()
-        if oc_process.returncode != 0:
-            logging.error(oc_stdout.strip().decode("utf-8"))
-            logging.error(oc_stderr.strip().decode("utf-8"))
-            logging.error('%s unable to execute. Retrying in 5 seconds until %s' % (oc_cmnd, datetime.datetime.fromtimestamp(starting_time + 15 * 60)))
+        command_code, command_out, command_err = common._subprocess_exec("oc get managedclusters " + cluster_id + " -o json", extra_params={'env': myenv})
+        if command_code != 0:
+            logging.error(command_out.strip().decode("utf-8"))
+            logging.error(command_err.strip().decode("utf-8"))
+            logging.error('Failed to execute oc get managedclusters for %s. Retrying in 5 seconds until %s' % (cluster_name, datetime.datetime.fromtimestamp(starting_time + 15 * 60)))
             time.sleep(5)
         else:
             try:
-                hostedcluster_json = json.loads(oc_stdout)
+                hostedcluster_json = json.loads(command_out.decode("utf-8"))
             except Exception as err:
-                logging.warning(oc_stdout)
-                logging.warning(oc_stderr)
+                logging.warning(command_out)
+                logging.warning(command_err)
                 logging.warning(err)
                 logging.warning("Failed to get the hosted cluster output for %s Cluster. Retrying in 5 seconds until %s" % (cluster_name, datetime.datetime.fromtimestamp(starting_time + 15 * 60)))
                 time.sleep(5)
                 continue
             if hostedcluster_json.get('metadata', {}).get('labels', {}).get('api.openshift.com/management-cluster'):
-
                 return hostedcluster_json['metadata']['labels']['api.openshift.com/management-cluster']
             else:
                 logging.warning("Failed to get the Management Cluster assigned for Hosted Cluster %s. Retrying in 5 seconds until %s" % (cluster_name, datetime.datetime.fromtimestamp(starting_time + 15 * 60)))
@@ -244,27 +203,16 @@ def _get_mgmt_cluster(sc_kubeconfig, cluster_id, cluster_name):
 
 def _gen_operator_roles(rosa_cmnd, cluster_name_seed, my_path, oidc_id, installer_role_arn):
     logging.info("Creating Operator Roles")
-    roles_cmd = [rosa_cmnd, 'create', 'operator-roles', '--prefix', cluster_name_seed, '-m', 'auto', '-y', '--hosted-cp', '--oidc-config-id', oidc_id, '--installer-role-arn', installer_role_arn]
-    logging.debug(roles_cmd)
-    roles_log = open(my_path + "/" + 'rosa_create_operator_roles.log', 'w')
-    roles_process = subprocess.Popen(roles_cmd, stdout=roles_log, stderr=roles_log)
-    roles_stdout, roles_stderr = roles_process.communicate()
-    if roles_process.returncode != 0:
-        logging.error('Unable to create operator roles. Please check logfile %s' % my_path + "/" + 'rosa_create_operator_roles.log')
-        exit(1)
-    else:
-        return True
+    roles_code, roles_out, roles_err = common._subprocess_exec(rosa_cmnd + ' create operator-roles --prefix ' + cluster_name_seed + ' -m auto -y --hosted-cp --oidc-config-id ' + oidc_id + ' --installer-role-arn ' + installer_role_arn, my_path + "/rosa_create_operator_roles.log")
+    sys.exit('Exiting...') if roles_code != 0 else logging.info('Operator Roles Created')
+    return True
 
 
 def _delete_operator_roles(rosa_cmnd, cluster_name_seed, my_path):
     logging.info("Deleting Operator Roles with prefix: %s" % cluster_name_seed)
-    roles_cmd = [rosa_cmnd, 'delete', 'operator-roles', '--prefix', cluster_name_seed, '-m', 'auto', '-y']
-    logging.debug(roles_cmd)
-    roles_log = open(my_path + "/" + 'rosa_delete_operator_roles.log', 'w')
-    roles_process = subprocess.Popen(roles_cmd, stdout=roles_log, stderr=roles_log)
-    roles_stdout, roles_stderr = roles_process.communicate()
-    if roles_process.returncode != 0:
-        logging.error('Unable to delete operator roles. Please manually delete them using `rosa delete operator-roles --prefix %s -m auto -y and check logfile %s for errors' % (cluster_name_seed, my_path + "/" + 'rosa_create_operator_roles.log'))
+    roles_code, roles_out, roles_err = common._subprocess_exec(rosa_cmnd + ' delete operator-roles --prefix cluster_name_seed -m auto -y', my_path + "/rosa_delete_operator_roles.log")
+    if roles_code != 0:
+        logging.error('Unable to delete operator roles. Please manually delete them using `rosa delete operator-roles --prefix %s -m auto -y and check logfile %s for errors' % (cluster_name_seed, my_path + "/rosa_create_operator_roles.log"))
         return False
     else:
         return True
@@ -272,184 +220,124 @@ def _delete_operator_roles(rosa_cmnd, cluster_name_seed, my_path):
 
 def _find_installer_role_arn(rosa_cmnd, my_path):
     logging.info("Find latest Installer Role ARN")
-    roles_cmd = [rosa_cmnd, 'list', 'account-roles', '-o', 'json']
-    logging.debug(roles_cmd)
-    roles_process = subprocess.Popen(roles_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    roles_stdout, roles_stderr = roles_process.communicate()
-    if roles_process.returncode != 0:
-        logging.error('Unable to list account Roles. Please check output result of `rosa list account-roles command`')
-        logging.error(roles_stdout)
-        logging.error(roles_stderr)
-        exit(1)
-    else:
-        installer_role_version = ver.parse("0")
-        installer_role_arn = None
-        for role in json.loads(roles_stdout.decode("utf-8")):
-            if role['RoleType'] == "Installer" and ver.parse(role['Version']) > installer_role_version:
-                installer_role_arn = role['RoleARN']
-                installer_role_version = ver.parse(role['Version'])
-        return installer_role_arn
+    roles_code, roles_out, roles_err = common._subprocess_exec(rosa_cmnd + ' list account-roles -o json')
+    sys.exit('Exiting...') if roles_code != 0 else logging.info('Installer Role ARN list obtained')
+    installer_role_version = ver.parse("0")
+    installer_role_arn = None
+    for role in json.loads(roles_out.decode("utf-8")):
+        if role['RoleType'] == "Installer" and ver.parse(role['Version']) > installer_role_version:
+            installer_role_arn = role['RoleARN']
+            installer_role_version = ver.parse(role['Version'])
+    return installer_role_arn
 
 
 def _verify_terraform(terraform_cmnd, my_path):
     logging.info('Testing terraform command with: terraform -version')
-    terraform_cmd = [terraform_cmnd, "-version"]
-    terraform_log = open(my_path + "/" + 'terraform-version.log', 'w')
-    terraform_process = subprocess.Popen(terraform_cmd, stdout=terraform_log, stderr=terraform_log)
-    terraform_stdout, terraform_stderr = terraform_process.communicate()
-    if terraform_process.returncode != 0:
-        logging.error('%s unable to execute -version' % terraform_cmnd)
-        exit(1)
-    logging.info('terraform command validated with -version. Directory is %s' % my_path)
+    terraform_code, terraform_out, terraform_err = common._subprocess_exec(terraform_cmnd + " -version", my_path + "/terraform-version.log")
+    sys.exit('Exiting...') if terraform_code != 0 else logging.info('Terraform command validated, executed from %s' % terraform_cmnd)
     return terraform_cmnd
 
 
 def _create_vpcs(terraform, retries, my_path, cluster_name_seed, cluster_count, aws_region):
     logging.info('Initializing Terraform with: terraform init')
-    terraform_init = [terraform, "init"]
-    terraform_log = open(my_path + "/terraform/" + 'terraform-apply.log', 'w')
-    terraform_init_process = subprocess.Popen(terraform_init, cwd=my_path + "/terraform", stdout=terraform_log, stderr=terraform_log)
-    terraform_init_stdout, terraform_init_stderr = terraform_init_process.communicate()
-    if terraform_init_process.returncode != 0:
-        logging.error('Failed to initialize terraform on %s' % my_path + "/terraform")
-        return 1
-    logging.info('Applying terraform plan command with: terraform apply for %s VPC(s), using %s as name seed on %s' % (cluster_count, cluster_name_seed, aws_region))
-    for trying in range(1, retries + 1):
-        logging.info('Try: %d. Starting terraform apply' % trying)
-        myenv = os.environ.copy()
-        myenv["TF_VAR_cluster_name_seed"] = cluster_name_seed
-        myenv["TF_VAR_cluster_count"] = str(cluster_count)
-        myenv["TF_VAR_aws_region"] = aws_region
-        terraform_apply = [terraform, "apply", "--auto-approve"]
-        terraform_apply_process = subprocess.Popen(terraform_apply, cwd=my_path + "/terraform", stdout=terraform_log, stderr=terraform_log, env=myenv)
-        terraform_apply_stdout, terraform_apply_stderr = terraform_apply_process.communicate()
-        if terraform_apply_process.returncode == 0:
-            logging.info('Applied terraform plan command with: terraform apply')
-            try:
-                with open(my_path + "/terraform/terraform.tfstate", "r") as terraform_file:
-                    json_output = json.load(terraform_file)
-            except Exception as err:
-                logging.error(err)
-                logging.error('Try: %d. Failed to read terraform output file %s' % (trying, my_path + "/terraform/terraform.tfstate"))
-                return 1
-            vpcs = []
-            # Check if we have IDs for everything
-            number_of_vpcs = len(json_output['outputs']['vpc-id']['value'])
-            number_of_public = len(json_output['outputs']['cluster-public-subnets']['value'])
-            number_of_private = len(json_output['outputs']['cluster-private-subnets']['value'])
-            if number_of_vpcs != cluster_count or number_of_public != cluster_count or number_of_private != cluster_count:
-                logging.info("Required Clusters: %d" % cluster_count)
-                logging.info('Number of VPCs: %d' % number_of_vpcs)
-                logging.info('Number of Private Subnets: %d' % number_of_private)
-                logging.info('Number of Public Subnets: %d' % number_of_public)
-                logging.warning('Try %d: Not all resources has been created. retring in 15 seconds' % trying)
-                time.sleep(15)
+    terraform_code, terraform_out, terraform_err = common._subprocess_exec(terraform + " init", my_path + '/terraform/terraform-version.log', {'cwd': my_path + '/terraform'})
+    if terraform_code == 0:
+        logging.info('Applying terraform plan command with: terraform apply for %s VPC(s), using %s as name seed on %s' % (cluster_count, cluster_name_seed, aws_region))
+        for trying in range(1, retries + 1):
+            logging.info('Try: %d. Starting terraform apply' % trying)
+            myenv = os.environ.copy()
+            myenv["TF_VAR_cluster_name_seed"] = cluster_name_seed
+            myenv["TF_VAR_cluster_count"] = str(cluster_count)
+            myenv["TF_VAR_aws_region"] = aws_region
+            apply_code, apply_out, apply_err = common._subprocess_exec(terraform + " apply --auto-approve", my_path + '/terraform/terraform-apply.log', {'cwd': my_path + '/terraform', 'env': myenv})
+            if apply_code == 0:
+                logging.info('Applied terraform plan command with: terraform apply')
+                try:
+                    with open(my_path + "/terraform/terraform.tfstate", "r") as terraform_file:
+                        json_output = json.load(terraform_file)
+                except Exception as err:
+                    logging.error(err)
+                    logging.error('Try: %d. Failed to read terraform output file %s' % (trying, my_path + "/terraform/terraform.tfstate"))
+                    return 1
+                vpcs = []
+                # Check if we have IDs for everything
+                number_of_vpcs = len(json_output['outputs']['vpc-id']['value'])
+                number_of_public = len(json_output['outputs']['cluster-public-subnets']['value'])
+                number_of_private = len(json_output['outputs']['cluster-private-subnets']['value'])
+                if number_of_vpcs != cluster_count or number_of_public != cluster_count or number_of_private != cluster_count:
+                    logging.info("Required Clusters: %d" % cluster_count)
+                    logging.info('Number of VPCs: %d' % number_of_vpcs)
+                    logging.info('Number of Private Subnets: %d' % number_of_private)
+                    logging.info('Number of Public Subnets: %d' % number_of_public)
+                    logging.warning('Try %d: Not all resources has been created. retring in 15 seconds' % trying)
+                    time.sleep(15)
+                else:
+                    for cluster in range(cluster_count):
+                        vpc_id = json_output['outputs']['vpc-id']['value'][cluster]
+                        public_subnets = json_output['outputs']['cluster-public-subnets']['value'][cluster]
+                        private_subnets = json_output['outputs']['cluster-private-subnets']['value'][cluster]
+                        if len(public_subnets) != 3 or len(private_subnets) != 3:
+                            logging.warning("Try: %d. Number of public subnets of VPC %s: %d (required: 3)" % (trying, vpc_id, len(public_subnets)))
+                            logging.warning("Try: %d. Number of private subnets of VPC %s: %d (required: 3)" % (trying, vpc_id, len(private_subnets)))
+                            logging.warning("Try: %d: Not all subnets created, retring in 15 seconds" % trying)
+                            time.sleep(15)
+                        else:
+                            logging.debug("VPC ID: %s, Public Subnet: %s, Private Subnet: %s" % (vpc_id, public_subnets, private_subnets))
+                            subnets = ",".join(public_subnets)
+                            subnets = subnets + "," + ",".join(private_subnets)
+                            vpcs.append((vpc_id, subnets))
+                    return vpcs
             else:
-                for cluster in range(cluster_count):
-                    vpc_id = json_output['outputs']['vpc-id']['value'][cluster]
-                    public_subnets = json_output['outputs']['cluster-public-subnets']['value'][cluster]
-                    private_subnets = json_output['outputs']['cluster-private-subnets']['value'][cluster]
-                    if len(public_subnets) != 3 or len(private_subnets) != 3:
-                        logging.warning("Try: %d. Number of public subnets of VPC %s: %d (required: 3)" % (trying, vpc_id, len(public_subnets)))
-                        logging.warning("Try: %d. Number of private subnets of VPC %s: %d (required: 3)" % (trying, vpc_id, len(private_subnets)))
-                        logging.warning("Try: %d: Not all subnets created, retring in 15 seconds" % trying)
-                        time.sleep(15)
-                    else:
-                        logging.debug("VPC ID: %s, Public Subnet: %s, Private Subnet: %s" % (vpc_id, public_subnets, private_subnets))
-                        subnets = ",".join(public_subnets)
-                        subnets = subnets + "," + ",".join(private_subnets)
-                        vpcs.append((vpc_id, subnets))
-                return vpcs
-        else:
-            logging.warning('Try: %d. %s unable to execute apply, retrying in 15 seconds' % (trying, terraform))
-            time.sleep(15)
-    logging.error('Failed to appy terraform plan after %d retries' % retries)
-    return []
+                logging.warning('Try: %d. %s unable to execute apply, retrying in 15 seconds' % (trying, terraform))
+                time.sleep(15)
+        logging.error('Failed to appy terraform plan after %d retries' % retries)
+    logging.error('Failed to initialize terraform on %s' % my_path + "/terraform")
+    return 1
 
 
 def _destroy_vpcs(terraform, retries, my_path, aws_region, vpcs):
-    terraform_destroy = [terraform, "destroy", "--auto-approve"]
-    terraform_log = open(my_path + "/terraform/" + 'terraform-destroy.log', 'w')
     for trying in range(1, retries + 1):
         if args.manually_cleanup_secgroups:
             for cluster in vpcs:
                 logging.info("Try: %d. Starting manually destroy of security groups" % trying)
                 _delete_security_groups(aws_region, my_path, cluster[0])
         logging.info("Try: %d. Starting terraform destroy process" % trying)
-        terraform_destroy_process = subprocess.Popen(terraform_destroy, cwd=my_path + "/terraform", stdout=terraform_log, stderr=terraform_log)
-        terraform_destroy_stdout, terraform_destroy_stderr = terraform_destroy_process.communicate()
-        if terraform_destroy_process.returncode == 0:
+        destroy_code, destroy_out, destroy_err = common._subprocess_exec(terraform + " destroy --auto-approve", my_path + "/terraform/terraform-destroy.log", {'cwd': my_path + '/terraform'})
+        if destroy_code == 0:
             logging.info("Try: %d. All VPCs destroyed" % trying)
             return 0
         else:
             logging.error('Try: %d. Failed to execute %s destroy, retrying in 15 seconds' % (trying, terraform))
             time.sleep(15)
+    logging.error('Failed to destroy VPCs after %d retries' % retries)
     return 1
 
 
 def _delete_security_groups(aws_region, my_path, vpc_id):
-    aws_log = open(my_path + "/terraform/" + 'aws_delete_sec_groups.log', 'w')
-    sec_groups_command = ["aws", "ec2", "describe-security-groups", "--filters", "Name=vpc-id,Values=" + vpc_id, "Name=group-name,Values=default,k8s*", "--region=" + aws_region, "--output", "json"]
-    logging.debug(sec_groups_command)
-    sec_groups_process = subprocess.Popen(sec_groups_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    sec_groups_stdout, sec_groups_stderr = sec_groups_process.communicate()
-    if sec_groups_process.returncode == 0:
-        for secgroup in json.loads(sec_groups_stdout.decode("utf-8"))['SecurityGroups']:
+    secgroups_delete_code, secgroups_delete_out, secgroups_delete_err = common._subprocess_exec("aws ec2 describe-security-groups --filters Name=vpc-id,Values=" + vpc_id + " Name=group-name,Values=default,k8s* --region=" + aws_region + " --output json", my_path + "/terraform/aws_delete_sec_groups.log")
+    if secgroups_delete_code == 0:
+        for secgroup in json.loads(secgroups_delete_out.decode("utf-8"))['SecurityGroups']:
             logging.info("Security GroupID: %s" % secgroup['GroupId'])
-            sec_groups_rules_command = ["aws", "ec2", "describe-security-group-rules", "--filters", "Name=group-id,Values=" + secgroup['GroupId'], "--region=" + aws_region, "--output", "json"]
-            logging.debug(sec_groups_rules_command)
-            sec_groups_rules_process = subprocess.Popen(sec_groups_rules_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            sec_groups_rules_stdout, sec_groups_rules_stderr = sec_groups_rules_process.communicate()
-            if sec_groups_rules_process.returncode == 0:
-                for secgrouprule in json.loads(sec_groups_rules_stdout.decode("utf-8"))['SecurityGroupRules']:
+            rules_code, rules_out, rules_err = common._subprocess_exec("aws ec2 describe-security-group-rules --filters Name=group-id,Values=" + secgroup['GroupId'] + " --region=" + aws_region + " --output json")
+            if rules_code == 0:
+                for secgrouprule in json.loads(rules_out.decode("utf-8"))['SecurityGroupRules']:
                     if secgroup['GroupName'] == 'default':
                         logging.info("Security Group Rule ID: %s of %s" % (secgrouprule['SecurityGroupRuleId'], secgroup['GroupId']))
-                        sec_groups_rule_delete_command = ["aws", "ec2", "revoke-security-group-ingress", "--region=" + aws_region, "--group-id", secgroup['GroupId'], "--security-group-rule-ids", secgrouprule['SecurityGroupRuleId']]
-                        logging.debug(sec_groups_rule_delete_command)
-                        sec_groups_rule_delete_process = subprocess.Popen(sec_groups_rule_delete_command, stdout=aws_log, stderr=aws_log)
-                        sec_groups_rule_delete_stdout, sec_groups_rule_delete_stderr = sec_groups_rule_delete_process.communicate()
-                        if sec_groups_rule_delete_process.returncode != 0:
-                            logging.error("Failed to revoke rule %s on Security Group %s" % (secgrouprule['SecurityGroupRuleId'], secgroup['GroupId']))
-                            logging.error(sec_groups_rule_delete_stderr)
-                            logging.error(sec_groups_rule_delete_stdout)
-                        else:
-                            logging.error("Revoked rule %s on Security Group %s" % (secgrouprule['SecurityGroupRuleId'], secgroup['GroupId']))
+                        secgroup_rule_revoke_code, secgroup_rule_revoke_out, secgroup_rule_revoke_err = common._subprocess_exec("aws ec2 revoke-security-group-ingress --region=" + aws_region + " --group-id " + secgroup['GroupId'] + " --security-group-rule-ids " + secgrouprule['SecurityGroupRuleId'], my_path + "/terraform/aws_delete_sec_groups.log")
+                        logging.info("Revoked rule %s on Security Group %s" % (secgrouprule['SecurityGroupRuleId'], secgroup['GroupId'])) if secgroup_rule_revoke_code == 0 else None
                     else:
                         logging.info("Deleting Security Group: %s" % secgroup['GroupName'])
-                        sec_groups_delete_command = ["aws", "ec2", "delete-security-group", "--region=" + aws_region, "--group-id", secgroup['GroupId']]
-                        logging.debug(sec_groups_delete_command)
-                        sec_groups_delete_process = subprocess.Popen(sec_groups_delete_command, stdout=aws_log, stderr=aws_log)
-                        sec_groups_delete_stdout, sec_groups_delete_stderr = sec_groups_delete_process.communicate()
-                        if sec_groups_delete_process.returncode != 0:
-                            logging.error("Failed to delete Security Group %s" % secgroup['GroupName'])
-                            logging.error(sec_groups_delete_stdout)
-                            logging.error(sec_groups_delete_stderr)
-                        else:
-                            logging.info("Deleted Security Group %s" % secgroup['GroupName'])
-            else:
-                logging.error("Failed to describe rules for Security Group %s" % secgroup['GroupId'])
-                logging.error(sec_groups_rules_stderr)
-                logging.error(sec_groups_rules_stdout)
-                return 1
-    else:
-        logging.error("Failed to describe security groups")
-        logging.error(sec_groups_stdout)
-        logging.error(sec_groups_stderr)
-        return 1
+                        secgroup_delete_code, secgroup_delete_out, secgroup_delete_err = common._subprocess_exec("aws ec2 delete-security-group --region=" + aws_region + " --group-id " + secgroup['GroupId'], my_path + "/terraform/aws_delete_sec_groups.log")
+                        logging.info("Deleted Security Group %s" % secgroup['GroupName']) if secgroup_delete_code == 0 else None
+    return 1
 
 
 def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster, es, index, index_retry, uuid):
     logging.info('Searching for Management/Service Clusters with name %s' % mgmt_cluster)
-    ocm_command = [ocm_cmnd, "get", "/api/clusters_mgmt/v1/clusters?search=name+is+%27" + mgmt_cluster + "%27"]
-    logging.debug(ocm_command)
-    ocm_process = subprocess.Popen(ocm_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    ocm_stdout, ocm_stderr = ocm_process.communicate()
+    ocm_code, ocm_out, ocm_err = common._subprocess_exec(ocm_cmnd + " get /api/clusters_mgmt/v1/clusters?search=name+is+%27" + mgmt_cluster + "%27")
     metadata = {}
-    if ocm_process.returncode != 0:
-        logging.error('%s unable to execute ' % ocm_command)
-        logging.error(ocm_stderr.strip().decode("utf-8"))
-    else:
-        for cluster in json.loads(ocm_stdout.decode("utf-8"))['items']:
+    if ocm_code == 0:
+        for cluster in json.loads(ocm_out.decode("utf-8"))['items']:
             if cluster['id'] == mgmt_cluster or cluster['name'] == mgmt_cluster:
                 metadata['uuid'] = uuid
                 metadata['cluster_name'] = cluster['name']
@@ -479,17 +367,9 @@ def _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster, es, index, index_retry, uuid)
 
 def _download_kubeconfig(ocm_cmnd, cluster_id, my_path, type):
     logging.debug('Downloading kubeconfig file for Cluster %s on %s' % (cluster_id, my_path))
-    kubeconfig_cmd = [ocm_cmnd, "get", "/api/clusters_mgmt/v1/clusters/" + cluster_id + "/credentials"]
-    logging.debug(kubeconfig_cmd)
-    process = subprocess.Popen(kubeconfig_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
-    stdout, stderr = process.communicate()
-    if process.returncode != 0:
-        logging.error('Failed to download kubeconfig file for Cluster ID %s with this stdout/stderr:' % cluster_id)
-        logging.error(stdout)
-        logging.error(stderr)
-        return ""
-    else:
-        kubeconfig_as_dict = yaml.load(json.loads(stdout)['kubeconfig'], Loader=yaml.Loader)
+    kubeconfig_code, kubeconfig_out, kubeconfig_err = common._subprocess_exec(ocm_cmnd + " get /api/clusters_mgmt/v1/clusters/" + cluster_id + "/credentials", extra_params={'cwd': my_path, 'universal_newlines': True})
+    if kubeconfig_code == 0:
+        kubeconfig_as_dict = yaml.load(json.loads(kubeconfig_out)['kubeconfig'], Loader=yaml.Loader)
         del kubeconfig_as_dict['clusters'][0]['cluster']['certificate-authority-data']
         kubeconfig_path = my_path + "/kubeconfig_" + type
         with open(kubeconfig_path, "w") as kubeconfig_file:
@@ -510,6 +390,7 @@ def _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, my_path):
         if force_terminate:
             logging.error("Exiting cluster access process for %s cluster after capturing Ctrl-C" % cluster_name)
             return return_data
+        # Not using common._subprocess_exec() because this is the only one execution where stdout and stderr goes to different descriptors
         process = subprocess.Popen(rosa_create_admin_cmd, stdout=subprocess.PIPE, stderr=rosa_create_admin_debug_log, cwd=my_path, universal_newlines=True)
         stdout, stderr = process.communicate()
         if process.returncode != 0:
@@ -528,14 +409,8 @@ def _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, my_path):
                 if force_terminate:
                     logging.error("Exiting cluster access process for %s cluster after capturing Ctrl-C" % cluster_name)
                     return return_data
-                oc_login_cmnd = ["oc", "login", json.loads(stdout[start_json:])['api_url'], "--username", json.loads(stdout[start_json:])['username'], "--password", json.loads(stdout[start_json:])['password'], "--kubeconfig", my_path + "/kubeconfig", "--insecure-skip-tls-verify=true", "--request-timeout=30s"]
-                logging.debug(oc_login_cmnd)
-                process_oc_login = subprocess.Popen(oc_login_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path, universal_newlines=True)
-                stdout_oc_login, stderr_oc_login = process_oc_login.communicate()
-                if process_oc_login.returncode != 0:
-                    logging.warning('Failed to login on cluster %s with cluster-admin user with this stdout/stderr:' % cluster_name)
-                    logging.warning(stdout_oc_login)
-                    logging.warning(stderr_oc_login)
+                oc_login_code, oc_login_out, oc_login_err = common._subprocess_exec("oc login " + json.loads(stdout[start_json:])['api_url'] + " --username " + json.loads(stdout[start_json:])['username'] + " --password " + json.loads(stdout[start_json:])['password'] + " --kubeconfig " + my_path + "/kubeconfig --insecure-skip-tls-verify=true --request-timeout=30s", extra_params={'cwd': my_path, 'universal_newlines': True}, log_output=False)
+                if oc_login_code != 0:
                     logging.warning('Waiting 5 seconds until %s for the next try on %s' % (cluster_name, datetime.datetime.fromtimestamp(oc_login_time + 30 * 60)))
                     time.sleep(5)
                 else:
@@ -545,19 +420,13 @@ def _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, my_path):
                     return_data['kubeconfig'] = my_path + "/kubeconfig"
                     myenv = os.environ.copy()
                     myenv["KUBECONFIG"] = return_data['kubeconfig']
-                    oc_adm_cmnd = ["oc", "adm", "top", "images"]
                     logging.info('Trying to perform oc adm command on cluster %s until %s' % (cluster_name, datetime.datetime.fromtimestamp(oc_adm_time_start + 30 * 60)))
-                    logging.debug(oc_adm_cmnd)
                     while datetime.datetime.utcnow().timestamp() < oc_adm_time_start + 30 * 60:
                         if force_terminate:
                             logging.error("Exiting cluster access process for %s cluster after capturing Ctrl-C" % cluster_name)
                             return return_data
-                        process_oc_adm = subprocess.Popen(oc_adm_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=my_path,  universal_newlines=True, env=myenv)
-                        stdout_oc_adm, stderr_oc_adm = process_oc_adm.communicate()
-                        if process_oc_adm.returncode != 0:
-                            logging.warning("Failed to perform oc adm command on %s with downloaded kubeconfig %s" % (cluster_name, my_path + "/kubeconfig"))
-                            logging.warning(stdout_oc_adm)
-                            logging.warning(stderr_oc_adm)
+                        oc_adm_code, oc_adm_out, oc_adm_err = common._subprocess_exec("oc adm top images", extra_params={'cwd': my_path, 'universal_newlines': True, 'env': myenv}, log_output=False)
+                        if oc_adm_code != 0:
                             logging.warning('Waiting 5 seconds for the next try on %s' % cluster_name)
                             time.sleep(5)
                         else:
@@ -583,13 +452,10 @@ def _preflight_wait(rosa_cmnd, cluster_id, cluster_name):
             logging.error("Exiting preflight times capturing on %s cluster after capturing Ctrl-C" % cluster_name)
             return 0
         logging.info('Getting status for cluster %s' % cluster_name)
-        status_cmnd = [rosa_cmnd, "describe", "cluster", "-c", cluster_id, "-o", "json"]
-        logging.debug(status_cmnd)
-        status_process = subprocess.Popen(status_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-        status_stdout, status_stderr = status_process.communicate()
+        status_code, status_out, status_err = common._subprocess_exec(rosa_cmnd + " describe cluster -c " + cluster_id + " -o json", extra_params={'universal_newlines': True})
         current_time = int(time.time())
         try:
-            current_status = json.loads(status_stdout)['state']
+            current_status = json.loads(status_out)['state']
         except Exception as err:
             logging.error("Cannot load metadata for cluster %s" % cluster_name)
             logging.error(err)
@@ -614,26 +480,21 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
     logging.info('Capturing namespace creation time on %s Cluster for %s. Waiting 30 minutes until %s' % (type, cluster_name, datetime.datetime.fromtimestamp(start_time + 30 * 60)))
     myenv = os.environ.copy()
     myenv["KUBECONFIG"] = kubeconfig
-    projects_cmnd = ["oc", "get", "projects", "--output", "json"]
     # Waiting 30 minutes for preflight checks to end
     while datetime.datetime.utcnow().timestamp() < start_time + 30 * 60:
         if force_terminate:
             logging.error("Exiting namespace creation waiting for %s on the %s cluster after capturing Ctrl-C" % (cluster_name, type))
             return 0
-        projects_process = subprocess.Popen(projects_cmnd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=myenv)
-        logging.debug(projects_cmnd)
-        projects_process_stdout, projects_process_stderr = projects_process.communicate()
-        if projects_process.returncode != 0:
-            logging.warning(projects_process_stdout)
-            logging.warning(projects_process_stderr)
+        oc_project_code, oc_project_out, oc_project_err = common._subprocess_exec("oc get projects --output json", extra_params={'env': myenv})
+        if oc_project_code != 0:
             logging.warning("Failed to get the project list on the %s Cluster. Retrying in 5 seconds. Waiting until %s" % (type, datetime.datetime.fromtimestamp(start_time + 30 * 60)))
             time.sleep(5)
         else:
             try:
-                projects_json = json.loads(projects_process_stdout)
+                projects_json = json.loads(oc_project_out)
             except Exception as err:
-                logging.warning(projects_process_stdout)
-                logging.warning(projects_process_stderr)
+                logging.warning(oc_project_out)
+                logging.warning(oc_project_err)
                 logging.warning(err)
                 logging.warning("Failed to get the project list on the %s Cluster. Retrying in 5 seconds until %s" % (type, datetime.datetime.fromtimestamp(start_time + 30 * 60)))
                 time.sleep(5)
@@ -645,8 +506,8 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
                     namespace_count += 1
             if (type == "Service" and namespace_count == 2) or (type == "Management" and namespace_count == 3):
                 end_time = int(time.time())
-                logging.info("Namespace for %s created in %s cluster in %d seconds" % (cluster_name, type, (end_time - start_time)))
-                return end_time - start_time
+                logging.info("Namespace for %s created in %s cluster at %s" % (cluster_name, type, datetime.datetime.fromtimestamp(end_time)))
+                return end_time
             else:
                 logging.warning("Namespace for %s not found in %s Cluster. Retrying in 5 seconds until %s" % (cluster_name, type, datetime.datetime.fromtimestamp(start_time + 30 * 60)))
                 time.sleep(5)
@@ -687,13 +548,12 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
         if force_terminate:
             logging.error("Exiting cluster creation for %s after capturing Ctrl-C" % cluster_name)
             return 0
-        process = subprocess.Popen(cluster_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
-        stdout, stderr = process.communicate()
+        create_cluster_code, create_cluster_out, create_cluster_err = common._subprocess_exec(' '.join(str(x) for x in cluster_cmd), cluster_path + "/installation.log", {'preexec_fn': disable_signals})
         trying += 1
-        if process.returncode != 0:
+        if create_cluster_code != 0:
             metadata['install_try'] = trying
-            logging.debug(stdout)
-            logging.debug(stderr)
+            logging.debug(create_cluster_out)
+            logging.debug(create_cluster_err)
             if trying <= 5:
                 logging.warning("Try: %d/5. Cluster %s installation failed, retrying in 15 seconds" % (trying, cluster_name))
                 time.sleep(15)
@@ -702,7 +562,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
                 metadata['status'] = "Not Installed"
                 cluster_load = False
                 logging.error("%s Cluster installation failed after 5 retries" % cluster_name)
-                logging.debug(stdout)
+                logging.debug(create_cluster_out)
         else:
             logging.info("Cluster %s installation started on the %d try" % (cluster_name, trying))
             metadata = get_metadata(cluster_name, rosa_cmnd)
@@ -711,15 +571,14 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
                 preflight_ch = executor.submit(_preflight_wait, rosa_cmnd, metadata['cluster_id'], cluster_name)
                 sc_namespace = executor.submit(_namespace_wait, sc_kubeconfig, metadata['cluster_id'], cluster_name, "Service") if sc_kubeconfig != "" else 0
                 preflight_checks = preflight_ch.result()
-                sc_namespace_timing = sc_namespace.result() if sc_kubeconfig != "" else 0
+                sc_namespace_timing = sc_namespace.result() - cluster_start_time if sc_kubeconfig != "" else 0
             mgmt_cluster_name = _get_mgmt_cluster(sc_kubeconfig, metadata['cluster_id'], cluster_name) if sc_kubeconfig != "" else None
             mgmt_metadata = _get_mgmt_cluster_info(ocm_cmnd, mgmt_cluster_name, es, index, index_retry, uuid) if mgmt_cluster_name else None
             mgmt_kubeconfig_path = _download_kubeconfig(ocm_cmnd, mgmt_metadata['cluster_id'], cluster_path, "mgmt") if mgmt_cluster_name else None
-            mc_namespace_timing = _namespace_wait(mgmt_kubeconfig_path, metadata['cluster_id'], cluster_name, "Management") if mgmt_kubeconfig_path else 0
+            mc_namespace_timing = _namespace_wait(mgmt_kubeconfig_path, metadata['cluster_id'], cluster_name, "Management") - cluster_start_time if mgmt_kubeconfig_path else 0
             watch_cmd = [rosa_cmnd, "logs", "install", "-c", cluster_name, "--watch"]
             logging.debug(watch_cmd)
-            watch_process = subprocess.Popen(watch_cmd, stdout=installation_log, stderr=installation_log, preexec_fn=disable_signals)
-            watch_stdout, watch_stderr = watch_process.communicate()
+            watch_code, watch_out, watch_err = common._subprocess_exec(rosa_cmnd + " logs install -c " + cluster_name + " --watch", cluster_path + "/installation.log", {'preexec_fn': disable_signals})
             cluster_end_time = int(time.time())
             metadata = get_metadata(cluster_name, rosa_cmnd)
             return_data = _download_cluster_admin_kubeconfig(rosa_cmnd, cluster_name, cluster_path)
@@ -736,6 +595,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
                 cluster_load = False
                 metadata['status'] = "Ready. Not Access"
             if args.machinepool_name:
+                extra_machine_pool_start_time = int(time.time())
                 _add_machinepools(rosa_cmnd, kubeconfig, metadata,
                                   args.machinepool_name,
                                   args.machinepool_flavour,
@@ -753,10 +613,10 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
                         result = future.result()
                         if result[0] == "workers":
                             default_pool_workers = int(result[1])
-                            metadata['workers_ready'] = result[2] if default_pool_workers == worker_nodes else ""
+                            metadata['workers_ready'] = result[2] - cluster_start_time if default_pool_workers == worker_nodes else ""
                         else:
                             extra_pool_workers = int(result[1])
-                            metadata['extra_pool_workers_ready'] = result[2] if args.machinepool_name and extra_pool_workers == args.machinepool_replicas else ""
+                            metadata['extra_pool_workers_ready'] = result[2] - extra_machine_pool_start_time if args.machinepool_name and extra_pool_workers == args.machinepool_replicas else ""
                 if cluster_load:
                     if default_pool_workers != worker_nodes:
                         logging.error("Insufficient number of workers on default machinepool (%d). Expected: %d. Disabling e2e-benchmarking execution on %s" % (default_pool_workers, worker_nodes, cluster_name))
@@ -795,7 +655,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
         logging.info('Executing e2e-benchmarking to add load on the cluster %s with %s nodes during %s with %d iterations' % (cluster_name, str(worker_nodes), load_duration, job_iterations))
         _cluster_load(kubeconfig, cluster_path, cluster_name, mgmt_cluster_name, service_cluster_name, load_duration, job_iterations, es_url, mgmt_kubeconfig_path, workload_type, kube_burner_version, e2e_git_details, git_branch)
         logging.info('Finished execution of e2e-benchmarking workload on %s' % cluster_name)
-    if must_gather_all or process.returncode != 0:
+    if must_gather_all or create_cluster_code != 0:
         random_sleep = random.randint(60, 300)
         logging.info("Waiting %d seconds before dumping hosted cluster must-gather" % random_sleep)
         time.sleep(random_sleep)
@@ -808,15 +668,12 @@ def _get_workers_ready(kubeconfig, cluster_name):
     myenv = os.environ.copy()
     myenv["KUBECONFIG"] = kubeconfig
     logging.info('Getting node information for cluster %s' % cluster_name)
-    nodes_command = ["oc", "get", "nodes", "-o", "json"]
-    logging.debug(nodes_command)
-    nodes_process = subprocess.Popen(nodes_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    nodes_stdout, nodes_stderr = nodes_process.communicate()
+    nodes_code, nodes_out, nodes_err = common._subprocess_exec("oc get nodes -o json", extra_params={'env': myenv, 'universal_newlines': True}, log_output=False)
     try:
-        nodes_json = json.loads(nodes_stdout)
+        nodes_json = json.loads(nodes_out)
     except Exception as err:
-        logging.error("Cannot load command result for cluster %s" % cluster_name)
-        logging.error(err)
+        logging.debug("Cannot load command result for cluster %s" % cluster_name)
+        logging.debug(err)
         return 0
     nodes = nodes_json['items'] if 'items' in nodes_json else []
     status = []
@@ -844,12 +701,9 @@ def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name, machine
             logging.error("Exiting workers waiting on the cluster %s after capturing Ctrl-C" % cluster_name)
             return []
         logging.info('Getting node information for cluster %s' % cluster_name)
-        nodes_command = ["oc", "get", "nodes", "-o", "json"]
-        logging.debug(nodes_command)
-        nodes_process = subprocess.Popen(nodes_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-        nodes_stdout, nodes_stderr = nodes_process.communicate()
+        nodes_code, nodes_out, nodes_err = common._subprocess_exec("oc get nodes -o json", extra_params={'env': myenv, 'universal_newlines': True})
         try:
-            nodes_json = json.loads(nodes_stdout)
+            nodes_json = json.loads(nodes_out)
         except Exception as err:
             logging.error("Cannot load command result for cluster %s. Waiting 15 seconds for next check..." % cluster_name)
             logging.error(err)
@@ -868,7 +722,7 @@ def _wait_for_workers(kubeconfig, worker_nodes, wait_time, cluster_name, machine
         if ready_nodes == worker_nodes:
             logging.info("Found %d/%d ready nodes on machinepool %s for cluster %s. Stopping wait." % (ready_nodes, worker_nodes, machinepool_name, cluster_name))
             result.append(ready_nodes)
-            result.append(str(datetime.datetime.utcnow().timestamp() - starting_time))
+            result.append(int(time.time()))
             return result
         else:
             logging.info("Found %d/%d ready nodes on machinepool %s for cluster %s. Waiting 15 seconds for next check..." % (ready_nodes, worker_nodes, machinepool_name, cluster_name))
@@ -900,20 +754,12 @@ def _add_machinepools(rosa_cmnd, kubeconfig, metadata, machinepool_name, machine
         if machinepool_taints:
             machinepool_cmd.append("--tains")
             machinepool_cmd.append(machinepool_taints)
-
-        logging.debug(machinepool_cmd)
-        machinepool_process = subprocess.Popen(machinepool_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        machinepool_stdout, machinepool_stderr = machinepool_process.communicate()
-        if machinepool_process.returncode != 0:
+        machinepool_code, machinepool_out, machinepool_err = common._subprocess_exec(' '.join(str(x) for x in machinepool_cmd))
+        if machinepool_code != 0:
             logging.error('Unable to create machinepool %s on %s' % (machinepool_name + "-" + id, metadata['cluster_name']))
-            logging.error(machinepool_stdout.strip().decode("utf-8"))
-            logging.error(machinepool_stderr.strip().decode("utf-8"))
 
 
 def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, jobs, es_url, mgmt_kubeconfig, workload_type, kube_burner_version, e2e_git_details, git_branch):
-    load_env = os.environ.copy()
-    load_env["KUBECONFIG"] = kubeconfig
-    load_env["MC_KUBECONFIG"] = mgmt_kubeconfig if mgmt_kubeconfig else ""
     logging.info('Cloning e2e-benchmarking repo %s', )
     Repo.clone_from(e2e_git_details, my_path + '/e2e-benchmarking', branch=git_branch)
     url = "https://github.com/cloud-bulldozer/kube-burner/releases/download/v" + kube_burner_version + "/kube-burner-" + kube_burner_version + "-Linux-x86_64.tar.gz"
@@ -921,101 +767,66 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, s
     response = requests.get(url, stream=True)
     with open(dest, 'wb') as f:
         f.write(response.raw.read())
-    untar_kb = ["tar", "xzf", my_path + "/kube-burner-" + kube_burner_version + "-Linux-x86_64.tar.gz", "-C", my_path + "/"]
-    logging.debug(untar_kb)
-    untar_kb_process = subprocess.Popen(untar_kb, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=load_env)
-    stdout, stderr = untar_kb_process.communicate()
-    if untar_kb_process.returncode != 0:
-        logging.error("Failed to untar Kube-burner from %s to %s" % (my_path + "/kube-burner-" + kube_burner_version + "-Linux-x86_64.tar.gz", my_path + "/kube-burner"))
-        return 1
-    os.chmod(my_path + '/kube-burner', 0o777)
-    os.chdir(my_path + '/e2e-benchmarking/workloads/kube-burner-ocp-wrapper')
-    load_env["ITERATIONS"] = str(jobs)
-    load_env["EXTRA_FLAGS"] = "--churn-duration=" + load_duration + " --churn-percent=10 --churn-delay=30s --timeout=24h"
-    if es_url is not None:
-        load_env["ES_SERVER"] = es_url
-    load_env["LOG_LEVEL"] = "debug"
-    load_env["WORKLOAD"] = str(workload_type)
-    load_env["KUBE_DIR"] = my_path
-    load_command = ["./run.sh"]
-    logging.debug(load_command)
-    load_log = open(my_path + '/cluster_load.log', 'w')
-    if not force_terminate:
-        load_process = subprocess.Popen(load_command, stdout=load_log, stderr=load_log, env=load_env)
-        load_process_stdout, load_process_stderr = load_process.communicate()
+    untarkb_code, untarkb_out, untarkb_err = common._subprocess_exec("tar xzf " + my_path + "/kube-burner-" + kube_burner_version + "-Linux-x86_64.tar.gz -C " + my_path + "/", extra_params={'universal_newlines': True})
+    if untarkb_code == 0:
+        os.chmod(my_path + '/kube-burner', 0o777)
+        os.chdir(my_path + '/e2e-benchmarking/workloads/kube-burner-ocp-wrapper')
+        load_env = os.environ.copy()
+        load_env["KUBECONFIG"] = kubeconfig
+        load_env["MC_KUBECONFIG"] = mgmt_kubeconfig if mgmt_kubeconfig else ""
+        load_env["ITERATIONS"] = str(jobs)
+        load_env["EXTRA_FLAGS"] = "--churn-duration=" + load_duration + " --churn-percent=10 --churn-delay=30s --timeout=24h"
+        if es_url is not None:
+            load_env["ES_SERVER"] = es_url
+        load_env["LOG_LEVEL"] = "debug"
+        load_env["WORKLOAD"] = str(workload_type)
+        load_env["KUBE_DIR"] = my_path
+        if not force_terminate:
+            load_code, load_out, load_err = common._subprocess_exec("./run.sh", my_path + '/cluster_load.log', {'env': load_env})
+        else:
+            logging.warning("Not starting e2e on cluster %s after capturing Ctrl-C" % hosted_cluster_name)
     else:
-        logging.warning("Not starting e2e on cluster %s after capturing Ctrl-C" % hosted_cluster_name)
+        return 1
 
 
 def _get_must_gather(cluster_path, cluster_name):
     myenv = os.environ.copy()
     myenv["KUBECONFIG"] = cluster_path + "/kubeconfig"
     logging.info('Gathering facts of hosted cluster %s' % cluster_name)
-    must_gather_command = ["oc", "adm", "must-gather", "--dest-dir", cluster_path + "/must_gather"]
-    logging.debug(must_gather_command)
-    must_gather_log = open(cluster_path + '/must_gather.log', 'w')
-    must_gather_process = subprocess.Popen(must_gather_command, stdout=must_gather_log, stderr=must_gather_log, env=myenv)
-    must_gather_stdout, must_gather_stderr = must_gather_process.communicate()
-    if must_gather_process.returncode != 0:
-        logging.error("Failed to obtain must-gather from %s" % cluster_name)
-        return 1
-    logging.info('Compressing must gather artifacts on %s file' % cluster_path + "/must_gather.tar.gz")
-    must_gather_compress_command = ["tar", "czvf", "must_gather.tar.gz", cluster_path + "/must_gather"]
-    logging.debug(must_gather_compress_command)
-    must_gather_compress_process = subprocess.Popen(must_gather_compress_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    must_gather_compress_stdout, must_gather_compress_stderr = must_gather_compress_process.communicate()
-    if must_gather_compress_process.returncode != 0:
-        logging.error("Failed to compress must-gather of %s cluster from %s to %s" % (cluster_name, cluster_path + "/must_gather", cluster_path + "/must_gather.tar.gz"))
-        return 1
-    logging.info('Deleting non-compressed must-gather files of hosted cluster %s' % cluster_name)
-    must_gather_delete_command = ["rm", "-rf", cluster_path + "/must_gather"]
-    logging.debug(must_gather_delete_command)
-    must_gather_delete_process = subprocess.Popen(must_gather_delete_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    must_gather_delete_stdout, must_gather_delete_stderr = must_gather_delete_process.communicate()
-    if must_gather_delete_process.returncode != 0:
-        logging.error("Failed to delete non-compressed must-gather files of hosted cluster %s" % cluster_name)
-        return 1
+    gather_code, gather_out, gather_err = common._subprocess_exec("oc adm must-gather --dest-dir " + cluster_path + "/must_gather", cluster_path + '/must_gather.log', {'env': myenv})
+    if gather_code == 0:
+        logging.info('Compressing must gather artifacts on %s file' % cluster_path + "/must_gather.tar.gz")
+        gather_compress_code, gather_compress_out, gather_compress_err = common._subprocess_exec("tar czvf must_gather.tar.gz " + cluster_path + "/must_gather", extra_params={'universal_newlines': True, 'env': myenv})
+        if gather_compress_code == 0:
+            logging.info('Deleting non-compressed must-gather files of hosted cluster %s' % cluster_name)
+            gather_delete_code, gather_delete_out, gather_delete_err = common._subprocess_exec("rm -rf " + cluster_path + "/must_gather", extra_params={'universal_newlines': True, 'env': myenv})
+            if gather_delete_code == 0:
+                return 0
+    return 1
 
 
 def _get_mgmt_cluster_must_gather(kubeconfig, my_path):
     myenv = os.environ.copy()
     myenv["KUBECONFIG"] = kubeconfig
     logging.info('Gathering facts of management cluster')
-    must_gather_command = ["oc", "adm", "must-gather", "--dest-dir", my_path + "/must_gather"]
-    logging.debug(must_gather_command)
-    must_gather_log = open(my_path + '/management_cluster_must_gather.log', 'w')
-    must_gather_process = subprocess.Popen(must_gather_command, stdout=must_gather_log, stderr=must_gather_log, env=myenv)
-    must_gather_stdout, must_gather_stderr = must_gather_process.communicate()
-    if must_gather_process.returncode != 0:
-        logging.error("Failed to obtain must-gather from Management Cluster")
-        return 1
-    logging.info('Compressing must gather artifacts on %s file' % (my_path + "/management_cluster_must_gather.tar.gz"))
-    must_gather_compress_command = ["tar", "czvf", my_path + "/management_cluster_must_gather.tar.gz", my_path + "/must_gather"]
-    logging.debug(must_gather_compress_command)
-    must_gather_compress_process = subprocess.Popen(must_gather_compress_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    must_gather_compress_stdout, must_gather_compress_stderr = must_gather_compress_process.communicate()
-    if must_gather_compress_process.returncode != 0:
-        logging.error("Failed to compress must-gather of Management Cluster from %s to %s" % (my_path + "/must_gather", my_path + "must_gather.tar.gz"))
-        return 1
-    logging.info('Deleting non-compressed must-gather files of Management Cluster')
-    must_gather_delete_command = ["rm", "-rf", my_path + "/must_gather"]
-    logging.debug(must_gather_delete_command)
-    must_gather_delete_process = subprocess.Popen(must_gather_delete_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=myenv)
-    must_gather_delete_stdout, must_gather_delete_stderr = must_gather_delete_process.communicate()
-    if must_gather_delete_process.returncode != 0:
-        logging.error("Failed to delete non-compressed must-gather files of Management Cluster")
-        return 1
+    gather_code, gather_out, gather_err = common._subprocess_exec("oc adm must-gather --dest-dir " + my_path + "/must_gather", my_path + '/management_cluster_must_gather.log', {'env': myenv})
+    if gather_code == 0:
+        logging.info('Compressing must gather artifacts on %s file' % (my_path + "/management_cluster_must_gather.tar.gz"))
+        gather_compress_code, gather_compress_out, gather_compress_err = common._subprocess_exec("tar czvf " + my_path + "/management_cluster_must_gather.tar.gz " + my_path + "/must_gather", extra_params={'universal_newlines': True, 'env': myenv})
+        if gather_compress_code == 0:
+            logging.info('Deleting non-compressed must-gather files of Management Cluster')
+            gather_delete_code, gather_delete_out, gather_delete_err = common._subprocess_exec("rm -rf " + my_path + "/must_gather", extra_params={'universal_newlines': True, 'env': myenv})
+            if gather_delete_code == 0:
+                return 0
+    return 1
 
 
 def get_metadata(cluster_name, rosa_cmnd):
     metadata = {}
     logging.info('Getting information for cluster %s' % cluster_name)
-    metadata_hosted = [rosa_cmnd, "describe", "cluster", "-c", cluster_name, "-o", "json"]
-    logging.debug(metadata_hosted)
-    metadata_hosted_process = subprocess.Popen(metadata_hosted, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-    metadata_hosted_stdout, metadata_hosted_stderr = metadata_hosted_process.communicate()
+    metadata_code, metadata_out, metadata_err = common._subprocess_exec(rosa_cmnd + " describe cluster -c " + cluster_name + " -o json", extra_params={'universal_newlines': True})
     try:
-        metadata_hosted_info = json.loads(metadata_hosted_stdout)
+        metadata_hosted_info = json.loads(metadata_out)
         metadata["cluster_name"] = metadata_hosted_info['name']
         metadata["cluster_id"] = metadata_hosted_info['id']
         metadata["network_type"] = metadata_hosted_info['network']['type']
@@ -1040,23 +851,19 @@ def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uui
     if os.path.exists(file_path):
         os.remove(file_path)
         time.sleep(60)
-
-    cmd = [rosa_cmnd, "list", "clusters", "-o", "json"]
     while not force_terminate:
-        logging.debug(cmd)
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-        stdout, stderr = process.communicate()
+        watcher_code, watcher_out, watcher_err = common._subprocess_exec(rosa_cmnd + " list clusters -o json", extra_params={'universal_newlines': True})
         current_cluster_count = 0
         installed_clusters = 0
         clusters_with_all_workers = 0
         state = {}
         error = []
         try:
-            clusters = json.loads(stdout)
+            clusters = json.loads(watcher_out)
         except ValueError as err:
             logging.error("Failed to get hosted clusters list: %s" % err)
-            logging.error(stdout)
-            logging.error(stderr)
+            logging.error(watcher_out)
+            logging.error(watcher_err)
             clusters = {}
         for cluster in clusters:
             if 'name' in cluster and cluster_name_seed in cluster['name']:
@@ -1112,35 +919,24 @@ def _cleanup_cluster(rosa_cmnd, cluster_name, my_path, my_uuid, es, index, index
     cluster_path = my_path + "/" + cluster_name
     metadata = get_metadata(cluster_name, rosa_cmnd)
     logging.debug('Destroying cluster name: %s' % cluster_name)
-    del_cmd = [rosa_cmnd, "delete", "cluster", "-c", cluster_name, "-y", "--watch"]
-    logging.debug(del_cmd)
-    cleanup_log = open(cluster_path + '/cleanup.log', 'w')
     cluster_start_time = int(time.time())
-    process = subprocess.Popen(del_cmd, stdout=cleanup_log, stderr=cleanup_log, preexec_fn=disable_signals)
-    stdout, stderr = process.communicate()
+    cleanup_code, cleanup_out, cleanup_err = common._subprocess_exec(rosa_cmnd + " delete cluster -c " + cluster_name + " -y --watch", cluster_path + '/cleanup.log', {'preexec_fn': disable_signals})
     cluster_delete_end_time = int(time.time())
-
-    if process.returncode != 0:
-        logging.error('Hosted cluster destroy failed for cluster name %s with this stdout/stderr:' % cluster_name)
-        logging.error(stdout)
-        logging.error(stderr)
-        metadata['status'] = "not deleted"
-    else:
+    if cleanup_code == 0:
         logging.debug('Confirm cluster %s deleted by attempting to describe the cluster. This should fail if the cluster is removed.' % cluster_name)
-        check_cmd = [rosa_cmnd, "describe", "cluster", "-c", cluster_name]
-        process_check = subprocess.Popen(check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = process_check.communicate()
-        if process_check.returncode != 0:
+        check_code, check_out, check_err = common._subprocess_exec(rosa_cmnd + " describe cluster -c " + cluster_name, log_output=False)
+        if check_code != 0:
+            metadata['status'] = 'deleted'
             logging.debug('Destroying STS associated resources of cluster name: %s' % cluster_name)
-            delete_operator_roles = [rosa_cmnd, "delete", "operator-roles", "--prefix", cluster_name, "-m", "auto", "-y"]
-            process_operator = subprocess.Popen(delete_operator_roles, stdout=cleanup_log, stderr=cleanup_log, preexec_fn=disable_signals)
-            stdout, stderr = process_operator.communicate()
-            if process_operator.returncode != 0:
+            operators_code, operators_out, operators_err = common._subprocess_exec(rosa_cmnd + " delete operator-roles --prefix " + cluster_name + " -m auto -y", cluster_path + '/cleanup.log', {'preexec_fn': disable_signals})
+            if operators_code != 0:
                 logging.error("Failed to delete operator roles on cluster %s" % cluster_name)
+                metadata['status'] = 'deleted but roles'
         else:
             logging.error('Cluster %s still in list of clusters. Not Removing Roles' % cluster_name)
             metadata['status'] = "not deleted"
-
+    else:
+        metadata['status'] = "not deleted"
     cluster_end_time = int(time.time())
     metadata['install_method'] = "rosa"
     metadata['duration'] = cluster_delete_end_time - cluster_start_time
@@ -1226,11 +1022,6 @@ def main():
         type=str,
         help='When downloading from GitHub, release to download. (Default: latest, to download the most recent release)',
         default='latest')
-    parser.add_argument(
-        '--rosa-init',
-        dest='rosa_init',
-        action='store_true',
-        help='Execute `rosa init` command to configure AWS account')
     parser.add_argument(
         '--add-cluster-load',
         action='store_true',
@@ -1329,16 +1120,15 @@ def main():
 
     logger = logging.getLogger()
     logger.setLevel(args.log_level.upper())
-    log_format = logging.Formatter(
-        '%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    log_format = '%(asctime)s %(levelname)s %(module)s - %(funcName)s: %(message)s'
     consolelog = logging.StreamHandler()
-    consolelog.setFormatter(log_format)
+    consolelog.setFormatter(common.CustomFormatter(log_format))
     logger.addHandler(consolelog)
     if args.log_file is not None:
         logging.info('Logging to file: %s' % args.log_file)
         common._create_path(os.path.dirname(args.log_file))
         logfile = logging.FileHandler(args.log_file)
-        logfile.setFormatter(log_format)
+        logfile.setFormatter(common.CustomFormatter(log_format))
         logger.addHandler(logfile)
         logging.info('Logging to file: %s' % args.log_file)
     else:
@@ -1433,50 +1223,30 @@ def main():
     ocm_cmnd, rosa_cmnd = _verify_cmnds(args.ocm_cli, args.rosa_cli, my_path, args.ocm_cli_version, args.rosa_cli_version)
 
     logging.info('Attempting to log in OCM using `ocm login`')
-    ocm_login_command = [ocm_cmnd, "login", "--url=" + args.ocm_url, "--token=" + args.ocm_token]
-    logging.debug(ocm_login_command)
-    ocm_login_process = subprocess.Popen(ocm_login_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    ocm_login_stdout, ocm_login_stderr = ocm_login_process.communicate()
-    if ocm_login_process.returncode != 0:
+    ocm_code, ocm_out, ocm_err = common._subprocess_exec(ocm_cmnd + " login --url=" + args.ocm_url + " --token=" + args.ocm_token)
+    if ocm_code != 0:
         logging.error('%s unable to execute `ocm login`' % ocm_cmnd)
-        logging.error(ocm_login_stderr.strip().decode("utf-8"))
-        exit(1)
+        logging.error(ocm_out.strip().decode("utf-8"))
+        logging.error(ocm_err.strip().decode("utf-8"))
+        sys.exit("Exiting...")
     else:
         logging.info('`ocm login` execution OK')
-        logging.debug(ocm_login_stdout.strip().decode("utf-8"))
+        logging.debug(ocm_out.strip().decode("utf-8"))
 
     logging.info('Attempting to log in OCM using `rosa login`')
     rosa_login_command = [rosa_cmnd, "login", "--token", args.ocm_token]
     if args.rosa_env:
         rosa_login_command.append("--env")
         rosa_login_command.append(args.rosa_env)
-    logging.debug(rosa_login_command)
-    rosa_login_process = subprocess.Popen(rosa_login_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    rosa_login_stdout, rosa_login_stderr = rosa_login_process.communicate()
-    if rosa_login_process.returncode != 0:
+    rosa_code, rosa_out, rosa_err = common._subprocess_exec(' '.join(str(x) for x in rosa_login_command))
+    if rosa_code != 0:
         logging.error('%s unable to execute `rosa login`' % rosa_cmnd)
-        logging.error(rosa_login_stderr.strip().decode("utf-8"))
-        exit(1)
+        logging.error(rosa_out.strip().decode("utf-8"))
+        logging.error(rosa_err.strip().decode("utf-8"))
+        sys.exit("Exiting...")
     else:
         logging.info('`rosa login` execution OK')
-        logging.debug(rosa_login_stdout.strip().decode("utf-8"))
-
-    if args.rosa_init:
-        logging.info('Executing `rosa init` command to configure AWS account')
-        rosa_init_command = [rosa_cmnd, "init", "--token", args.ocm_token]
-        if args.rosa_env:
-            rosa_login_command.append("--env")
-            rosa_login_command.append(args.rosa_env)
-        logging.debug(rosa_init_command)
-        rosa_init_process = subprocess.Popen(rosa_init_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        rosa_init_stdout, rosa_init_stderr = rosa_init_process.communicate()
-        if rosa_init_process.returncode != 0:
-            logging.error('%s unable to execute `rosa init`' % rosa_cmnd)
-            logging.error(rosa_init_stderr.strip().decode("utf-8"))
-            exit(1)
-        else:
-            logging.info('`rosa init` execution OK')
-            logging.debug(rosa_init_stdout.strip().decode("utf-8"))
+        logging.debug(rosa_out.strip().decode("utf-8"))
 
     service_cluster = ""
     if args.provision_shard:
@@ -1486,8 +1256,8 @@ def main():
         oidc_config_id = args.oidc_config_id
         oidc_cleanup = False
         if not _verify_oidc_config_id(oidc_config_id, rosa_cmnd, my_path):
-            logging.error('Provided oidc-config-id %s is not found in ROSA account. Exiting...' % oidc_config_id)
-            exit(1)
+            logging.error('Provided oidc-config-id %s is not found in ROSA account' % oidc_config_id)
+            sys.exit('Exiting...')
     else:
         oidc_config_id = _gen_oidc_config_id(rosa_cmnd, cluster_name_seed, my_path)
         oidc_cleanup = True
@@ -1604,16 +1374,13 @@ def main():
         time.sleep(args.wait_before_cleanup * 60)
         logging.info('Attempting to delete all hosted clusters with seed %s' % (cluster_name_seed))
         delete_cluster_thread_list = []
-        cmd = [rosa_cmnd, "list", "clusters", "-o", "json"]
-        logging.debug(cmd)
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, preexec_fn=disable_signals)
-        stdout, stderr = process.communicate()
+        list_code, list_out, list_err = common._subprocess_exec(rosa_cmnd + " list clusters -o json", extra_params={'universal_newlines': True, 'preexec_fn': disable_signals})
         try:
-            clusters = json.loads(stdout)
+            clusters = json.loads(list_out)
         except ValueError as err:
             logging.error("Failed to get clusters list: %s" % err)
-            logging.error(stdout)
-            logging.error(stderr)
+            logging.error(list_out)
+            logging.error(list_err)
             clusters = {}
         for cluster in clusters:
             if 'name' in cluster and cluster_name_seed in cluster['name']:
@@ -1641,15 +1408,10 @@ def main():
                 else:
                     raise
 
-        deleted_roles = _delete_operator_roles(rosa_cmnd, cluster_name_seed, my_path) if args.common_operator_roles else None
+        _delete_operator_roles(rosa_cmnd, cluster_name_seed, my_path) if args.common_operator_roles else None
 
         if oidc_cleanup:
-            delete_oidc_cmd = [rosa_cmnd, 'delete', 'oidc-config', '--oidc-config-id', oidc_config_id, '-m', 'auto', '-y']
-            delete_oidc_process = subprocess.Popen(delete_oidc_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            delete_oidc_stdout, delete_oidc_stderr = delete_oidc_process.communicate()
-            if delete_oidc_process.returncode != 0:
-                logging.error('Deletion of OIDC ID %s failed. Manual Cleanup Required' % oidc_config_id)
-                logging.error(delete_oidc_stderr.strip().decode("utf-8"))
+            delete_code, delete_out, delete_err = common._subprocess_exec(rosa_cmnd + " delete oidc-config --oidc-config-id " + oidc_config_id + " -m auto -y")
 
         if args.create_vpc:
             # Hard code to a single destroy vpc retry so we do not endlessly retry when clusters fail to uninstall
@@ -1661,9 +1423,7 @@ def main():
         logging.info('Cleaning working directory %s' % my_path)
         shutil.rmtree(my_path)
 
-    stuck_clusters = [rosa_cmnd, 'list', 'clusters', '-o', 'json']
-    stuck_process = subprocess.Popen(stuck_clusters, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stuck_stdout, stuck_stderr = stuck_process.communicate()
+    stuck_clusters_code, stuck_clusters_out, stuck_clusters_err = common._subprocess_exec(rosa_cmnd + ' list clusters -o json')
 
 # Last, output test result
     logging.info('************************************************************************')
@@ -1673,10 +1433,8 @@ def main():
     logging.info('Batches size: %s' % (str(args.batch_size)))
     logging.info('Delay between batches: %s' % (str(args.delay_between_batch)))
     logging.info('Cluster Name Seed: %s' % (cluster_name_seed))
-    if stuck_process.returncode != 0:
-        logging.error('Could not validate if any clusters were stuck')
-    else:
-        for cluster_exists in json.loads(stuck_stdout):
+    if stuck_clusters_code == 0:
+        for cluster_exists in json.loads(stuck_clusters_out):
             if cluster_name_seed in cluster_exists["name"]:
                 logging.info('%s still exists' % cluster_exists["name"])
 
