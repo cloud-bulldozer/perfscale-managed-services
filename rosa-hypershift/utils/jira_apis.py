@@ -1,44 +1,10 @@
+import json
+import boto3
+from botocore.exceptions import ClientError
 from jira import JIRA
 from jira.exceptions import JIRAError
-# import argparse
-import boto3
-import json
-
-'''
-parser = argparse.ArgumentParser(description="hypershift wrapper script")
-parser.add_argument(
-    '--ticket_id',
-    type=str,
-    help='Pass issue id'
-)
-
-parser.add_argument(
-    '--api_token',
-    type=str,
-    help='Pass JIRA API Token'
-)
-args = parser.parse_args()
-api_token = args.api_token
-issue_id = args.ticket_id
-'''
 
 jira_url = 'https://issues.redhat.com/'
- 
-### api_token ='XXXYYYZZZ'
-
-try:
-    jira = JIRA(server=jira_url, token_auth=(api_token))
-except JIRAError as e:
-    print("Failed to connect to JIRA: " + str(e))
-    exit(1)
- 
-def verify_issue_id(issue_id):
-    try:
-        issue = jira.issue(issue_id)
-        print(f"Issue '{issue.key}' exists.")
-        return True
-    except Exception:
-        print(f"Not a valid issue ID: {issue_id}")
 
 def retreive_api_token(secret_name):
     client = boto3.client('secretsmanager')
@@ -55,3 +21,43 @@ def retreive_api_token(secret_name):
     except Exception:
         print("Failed to retreive API token from Secrets Manager")
         return None
+
+def aws_get_secret():
+    secret_name = "jira_api"
+    region_name = "us-west-2"
+
+    # Create a Secrets Manager client
+    session = boto3.session.Session()
+    client = session.client(
+        service_name='secretsmanager',
+        region_name=region_name
+    )
+
+    try:
+        get_secret_value_response = client.get_secret_value(
+            SecretId=secret_name
+        )
+    except ClientError as e:
+        # For a list of exceptions thrown, see
+        # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
+        raise e
+
+    # Decrypts secret using the associated KMS key.
+    secret = get_secret_value_response['SecretString']
+    return secret
+
+try:
+    jira_secret = aws_get_secret()
+    api_token = retreive_api_token(jira_secret)
+    jira = JIRA(server=jira_url, token_auth=(api_token))
+except JIRAError as e:
+    print("Failed to connect to JIRA: " + str(e))
+    exit(1)
+ 
+def verify_issue_id(issue_id):
+    try:
+        issue = jira.issue(issue_id)
+        print(f"Issue '{issue.key}' exists.")
+        return True
+    except Exception:
+        print(f"Not a valid issue ID: {issue_id}")
