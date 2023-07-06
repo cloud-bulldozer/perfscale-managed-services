@@ -115,13 +115,11 @@ machinepoolParser.add_argument(
 machinepoolParser.add_argument(
     '--machinepool-labels',
     type=str,
-    default='node-role.kubernetes.io/workload=',
-    help='Labels to add on the machinepool. Default: node-role.kubernetes.io/workload=')
+    help='Labels to add on the machinepool')
 machinepoolParser.add_argument(
     '--machinepool-taints',
     type=str,
-    default='role=workload:NoSchedule',
-    help='Taints to add on the machinepool. Default: role=workload:NoSchedule')
+    help='Taints to add on the machinepool')
 machinepoolParser.add_argument(
     '--machinepool-flavour',
     type=str,
@@ -130,18 +128,12 @@ machinepoolParser.add_argument(
 machinepoolParser.add_argument(
     '--machinepool-replicas',
     type=int,
-    default=2,
-    help='Number of hosts to create on the machinepool. Default: 2')
+    default=3,
+    help='Number of hosts to create on the machinepool. Default: 3')
 machinepoolParser.add_argument(
-    '--machinepool-wait',
-    dest='machinepool_wait',
-    action='store_true',
-    help='After creating the machinepool, wait until nodes to come up')
-machinepoolParser.add_argument(
-    '--machinepool-wait-cycles',
-    default=60,
+    '--machinepool-wait-time',
     type=int,
-    help='Number of 5 seconds wait cycles until halts the waiting')
+    help='Waiting time in seconds for hosts to come up')
 
 logParser = argparse.ArgumentParser(add_help=False)
 logParser.add_argument(
