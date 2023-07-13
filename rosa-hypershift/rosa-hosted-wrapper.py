@@ -536,7 +536,6 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
         cluster_cmd.append("--operator-roles-prefix")
         cluster_cmd.append(cluster_name_seed)
     if args.ticket_id:
-        jira_apis.verify_issue_id(args.ticket_id)
         cluster_cmd.append("--tags=TicketId:{}.format(args.ticket_id")
     cluster_start_time = int(time.time())
     logging.info("Trying to install %s cluster with %d workers up to 5 times" % (cluster_name, worker_nodes))
@@ -837,6 +836,16 @@ def get_metadata(cluster_name, rosa_cmnd):
         logging.error(err)
     return metadata
 
+def _verify_issue_id(ticket_id):
+    if not ticket_id:
+        return None
+    try:
+        jira_apis.verify_issue_id(ticket_id)
+        return ticket_id
+    except Exception as e:
+        logging.error(e)
+        sys.exit('Did not find Ticket-ID')
+    
 
 def _watcher(rosa_cmnd, my_path, cluster_name_seed, cluster_count, delay, my_uuid, all_clusters_installed, cluster_load):
     time.sleep(60)
@@ -1083,8 +1092,8 @@ def main():
     parser.add_argument(
         '--kube-burner-version',
         type=str,
-        help='Kube-burner version, if none provided defaults to 1.5 ',
-        default='1.5')
+        help='Kube-burner version, if none provided defaults to 1.7.2 ',
+        default='1.7.2')
     parser.add_argument(
         '--e2e-git-details',
         type=str,
@@ -1097,8 +1106,8 @@ def main():
         default='master')
     parser.add_argument(
         '--ticket_id',
-        type=str,
-        help='Approved Ticket ID for cloud-spend',
+        type=_verify_issue_id,
+        help='Approved Ticket ID for Cloud spend, like CLGOVN-154',
         required=False
     )
 
