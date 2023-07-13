@@ -534,6 +534,10 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
     if operator_roles_prefix:
         cluster_cmd.append("--operator-roles-prefix")
         cluster_cmd.append(cluster_name_seed)
+    if ticket_id:
+        cluster_cmd.append("--tags=TicketId:{}".format(ticket_id))
+    logging.debug(cluster_cmd)
+    installation_log = open(cluster_path + "/" + 'installation.log', 'w')
     cluster_start_time = int(time.time())
     logging.info("Trying to install %s cluster with %d workers up to 5 times" % (cluster_name, worker_nodes))
     metadata = {}
@@ -1091,6 +1095,11 @@ def main():
         type=str,
         help='Specify a desired branch of the corresponding git',
         default='master')
+    parser.add_argument(
+        '--ticket-id',
+        type=int,
+        help='Ticket ID for cloud spend approval',
+        required=True)
 
 # Delete following parameter and code when default security group wont be used
     parser.add_argument(
