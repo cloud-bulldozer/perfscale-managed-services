@@ -514,7 +514,7 @@ def _namespace_wait(kubeconfig, cluster_id, cluster_name, type):
     return 0
 
 
-def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, service_cluster_name, sc_kubeconfig, all_clusters_installed, oidc_config_id, workload_type, kube_burner_version, e2e_git_details, git_branch, operator_roles_prefix):
+def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, provision_shard, create_vpc, vpc_info, wait_time, cluster_load, load_duration, job_iterations, worker_nodes, my_path, my_uuid, my_inc, es, es_url, index, index_retry, service_cluster_name, sc_kubeconfig, all_clusters_installed, oidc_config_id, workload_type, kube_burner_version, e2e_git_details, git_branch, operator_roles_prefix, worker_label):
     # pass that dir as the cwd to subproccess
     cluster_path = my_path + "/" + cluster_name_seed + "-" + str(my_inc).zfill(4)
     os.mkdir(cluster_path)
@@ -647,7 +647,7 @@ def _build_cluster(ocm_cmnd, rosa_cmnd, cluster_name_seed, must_gather_all, prov
             logging.info('Waiting for all clusters to be installed to start e2e-benchmarking execution on %s' % cluster_name)
             all_clusters_installed.wait()
         logging.info('Executing e2e-benchmarking to add load on the cluster %s with %s nodes during %s with %d iterations' % (cluster_name, str(worker_nodes), load_duration, job_iterations))
-        _cluster_load(kubeconfig, cluster_path, cluster_name, mgmt_cluster_name, service_cluster_name, load_duration, job_iterations, es_url, mgmt_kubeconfig_path, workload_type, kube_burner_version, e2e_git_details, git_branch)
+        _cluster_load(kubeconfig, cluster_path, cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, job_iterations, es_url, mgmt_kubeconfig, workload_type, kube_burner_version, e2e_git_details, git_branch, worker_label)
         logging.info('Finished execution of e2e-benchmarking workload on %s' % cluster_name)
     if must_gather_all or create_cluster_code != 0:
         random_sleep = random.randint(60, 300)
@@ -753,7 +753,8 @@ def _add_machinepools(rosa_cmnd, kubeconfig, metadata, machinepool_name, machine
             logging.error('Unable to create machinepool %s on %s' % (machinepool_name + "-" + id, metadata['cluster_name']))
 
 
-def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, jobs, es_url, mgmt_kubeconfig, workload_type, kube_burner_version, e2e_git_details, git_branch):
+
+def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, svc_cluster_name, load_duration, jobs, es_url, mgmt_kubeconfig, workload_type, kube_burner_version, e2e_git_details, git_branch, worker_label):
     logging.info('Cloning e2e-benchmarking repo %s', )
     Repo.clone_from(e2e_git_details, my_path + '/e2e-benchmarking', branch=git_branch)
     url = "https://github.com/cloud-bulldozer/kube-burner/releases/download/v" + kube_burner_version + "/kube-burner-" + kube_burner_version + "-Linux-x86_64.tar.gz"
@@ -775,6 +776,9 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, s
         load_env["LOG_LEVEL"] = "debug"
         load_env["WORKLOAD"] = str(workload_type)
         load_env["KUBE_DIR"] = my_path
+        if worker_label is not None:
+            logging.info('Updating the metrics yaml files with label %s information' % worker_label)
+            _run_on_labels(my_path, worker_label, workload_type)
         if not force_terminate:
             load_code, load_out, load_err = common._subprocess_exec("./run.sh", my_path + '/cluster_load.log', {'env': load_env})
         else:
@@ -782,6 +786,33 @@ def _cluster_load(kubeconfig, my_path, hosted_cluster_name, mgmt_cluster_name, s
     else:
         return 1
 
+def _run_on_labels(my_path, worker_label, workload_type):
+    default_label = "worker"
+    logging.info('Extracting the %s workload files from kube-burner' % workload_type)
+    os.chdir(my_path + '/e2e-benchmarking/workloads/kube-burner-ocp-wrapper')
+    extract_command = ["kube-burner", "ocp", workload_type, "--extract"]
+    logging.debug(extract_command)
+    extract_process = subprocess.Popen(extract_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    stdout, stderr = extract_process.communicate()
+
+    if extract_process.returncode != 0:
+        logging.error('unable to execute `%s`' % extract_command)
+        logging.error(stderr)
+        exit(1)
+    else:
+        logging.info('`%s` execution OK' % extract_command)
+        logging.debug(stdout)
+
+    logging.info('Search and replace the label %s' % worker_label)    
+    for root, dirs, filename in os.walk('.'):
+        for files in filename:
+            if files.endswith(".yml") or files.endswith(".yaml"):
+                with open(os.path.join(root, files), 'r+') as f:
+                    contents = f.read()
+                    f.seek(0)
+                    updated_contents = contents.replace(default_label, worker_label)
+                    f.write(updated_contents)
+                    f.close()
 
 def _get_must_gather(cluster_path, cluster_name):
     myenv = os.environ.copy()
@@ -1090,7 +1121,12 @@ def main():
         '--git-branch',
         type=str,
         help='Specify a desired branch of the corresponding git',
-        default='master')
+        default='master')    
+    parser.add_argument(
+        '--worker-labelling',
+        type=str,
+        help = 'Runs kube-burner workload on specific nodes'
+    )
 
 # Delete following parameter and code when default security group wont be used
     parser.add_argument(
